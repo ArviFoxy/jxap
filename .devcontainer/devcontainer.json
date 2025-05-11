@@ -13,7 +13,7 @@
   // Use 'forwardPorts' to make a list of ports inside the container available locally.
   // "forwardPorts": [],
   // Use 'postCreateCommand' to run commands after the container is created.
-  "postCreateCommand": "pip install --upgrade pip && pip install -r python/requirements.txt",
+  "postCreateCommand": "pip install --upgrade pip && pip install -r python/requirements.txt && bazel --version && sudo chown -R vscode:vscode /home/vscode/.cache/bazel",
   // Configure tool-specific properties.
   "customizations": {
     // Configure properties specific to VS Code.

@@ -1,0 +1,57 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: Current File (Add Project Root)", // Descriptive name
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}", // Runs the file currently open in the editor
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/python"
+      },
+      "cwd": "${workspaceFolder}/python",
+      "justMyCode": true // Optional: Set to false to debug into installed libraries
+    },
+    {
+      "name": "Debug C++ Test",
+      "type": "cppdbg",
+      "request": "launch",
+      // Resolved by CMake Tools:
+      "program": "${command:cmake.launchTargetPath}",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}/build", // Run from build directory
+      "environment": [
+        {
+          // add the directory where our binaries are located to the PATH
+          // ensure that linking works correctly.
+          "name": "PATH",
+          "value": "${env:PATH}:${command:cmake.getLaunchTargetDirectory}"
+        },
+        {
+          "name": "OTHER_VALUE",
+          "value": "Something something"
+        }
+      ],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        },
+        {
+          "description": "Set Disassembly Flavor to Intel",
+          "text": "-gdb-set disassembly-flavor intel",
+          "ignoreFailures": true
+        }
+      ],
+      "preLaunchTask": "CMake Build", // Ensure project is built before debugging
+      // If you are debugging a test executable directly (without ctest),
+      // point 'program' to it, e.g., "${workspaceFolder}/build/tests/cpp/cpp_tests"
+      // and potentially add GTest flags to 'args', e.g., ["--gtest_filter=*MySpecificTest*"]
+    },
+  ]
+}

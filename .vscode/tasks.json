@@ -1,0 +1,83 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "CMake Configure",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "-S",
+                "${workspaceFolder}",
+                "-B",
+                "${workspaceFolder}/build",
+                "-DCMAKE_BUILD_TYPE=Debug" // Or Release, RelWithDebInfo, etc.
+                // Add other CMake configure arguments here if needed
+            ],
+            "group": "build",
+            "problemMatcher": [],
+            "detail": "Configure the project using CMake."
+        },
+        {
+            "label": "CMake Build",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "${workspaceFolder}/build",
+                "--config", // Specify config for multi-config generators
+                "Debug"     // Match the config used in configure step
+                // Add parallel build flag, e.g., "--", "-j", "8"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"],
+            "detail": "Build the project using CMake."
+        },
+        {
+            "label": "CTest",
+            "type": "shell",
+            "command": "ctest",
+            "args": [
+                "--output-on-failure",
+                // "--verbose", // Uncomment for verbose output
+                "--test-dir",
+                "${workspaceFolder}/build" // Run CTest from the build directory
+            ],
+            "dependsOn": ["CMake Build"], // Ensure project is built before testing
+            "group": {
+                "kind": "test",
+                "isDefault": true // Make this the default test task for C++
+            },
+            "problemMatcher": [],
+            "detail": "Run C++ unit tests using CTest."
+        },
+         {
+            "label": "Pytest",
+            "type": "shell",
+            "command": "pytest", // Assumes pytest is in the PATH
+            "args": [
+                "-v", // Verbose output
+                "${workspaceFolder}/tests/python" // Specify the directory containing Python tests
+            ],
+            "group": {
+                "kind": "test",
+                "isDefault": true // Make this the default test task for Python
+            },
+            "problemMatcher": [], // Add Python problem matchers if needed
+            "detail": "Run Python unit tests using Pytest."
+        },
+        {
+            "label": "Clean Build Directory",
+            "type": "shell",
+            "command": "rm",
+            "args": [
+                "-rf",
+                "${workspaceFolder}/build/*"
+            ],
+            "problemMatcher": [],
+            "detail": "Remove all contents of the build directory."
+        }
+    ]
+}

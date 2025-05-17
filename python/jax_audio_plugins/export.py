@@ -103,8 +103,8 @@ def export_plugin(plugin: types.Plugin,
     init_path = f"{path}-init"
     logging.info("Saving to %s...", init_path)
     os.makedirs(os.path.dirname(init_path), exist_ok=True)
-    with open(init_path, 'wb') as out_file:
-        out_file.write(exported_init_fn.mlir_module_serialized)
+    with open(init_path, 'w', encoding='utf-8') as out_file:
+        out_file.write(exported_init_fn.mlir_module())
 
     def _update_fn(state, buffers):
         state = jax.tree.unflatten(state_tree_def.tree_def, state)
@@ -123,5 +123,5 @@ def export_plugin(plugin: types.Plugin,
     update_path = f"{path}-update"
     logging.info("Saving to %s...", update_path)
     os.makedirs(os.path.dirname(update_path), exist_ok=True)
-    with open(update_path, 'wb') as out_file:
-        out_file.write(exported_update_fn.mlir_module_serialized)
+    with open(update_path, 'w', encoding='utf-8') as out_file:
+        out_file.write(exported_update_fn.mlir_module())

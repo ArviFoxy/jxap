@@ -41,15 +41,16 @@
         "ms-vscode.cpptools",
         "ms-vscode.cpptools-extension-pack",
         "ms-vscode.cmake-tools",
-        "cheshirekow.cmake-format", // CMake Formatter
+        "cheshirekow.cmake-format",
         "ms-python.python",
         "ms-python.debugpy",
         "ms-python.pylint",
         "eeyore.yapf",
-        "ms-vscode.makefile-tools", // Useful if Makefiles are involved
-        "eamodio.gitlens", // GitLens
-        "mhutchie.git-graph", // Git Graph
-        "bazelbuild.vscode-bazel"
+        "ms-vscode.makefile-tools",
+        "eamodio.gitlens",
+        "mhutchie.git-graph",
+        "bazelbuild.vscode-bazel",
+        "google.geminicodeassist"
       ]
     }
   },

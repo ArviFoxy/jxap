@@ -7,13 +7,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     sudo \
+    # Build tools.
     clang \
+    lld \
     curl \
     gdb \
     cmake \
     ninja-build \
     git \
     pkg-config \
+    ccache \
+    # Python
     python3 \
     python3-pip \
     python3-venv \

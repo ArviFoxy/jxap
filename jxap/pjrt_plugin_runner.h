@@ -12,6 +12,7 @@ namespace jxap {
 
 class PJRTContext;
 class PJRTExecutable;
+class PJRTPluginRunner;
 
 /**
  * Specification of an audio buffer size.
@@ -54,7 +55,7 @@ class PJRTPluginRunner {
    PJRTPluginRunner() = default;
  
   public:
-   ~PJRTPluginRunner() = default;
+   ~PJRTPluginRunner();
 
    /**
     * Loads the plugin from a jxap file.
@@ -62,10 +63,11 @@ class PJRTPluginRunner {
    static absl::StatusOr<std::unique_ptr<PJRTPluginRunner>> LoadPlugin(absl::string_view path);
 
    /**
-    * Compiles the plugin, filling in static buffer specs.
+    * Compiles the plugin, filling in static buffer shapes.
     */
    absl::StatusOr<PJRTCompiledPlugin> Compile(
     const std::map<std::string, AudioBufferSpec>& input_buffer_specs,
+    const std::map<std::string, AudioBufferSpec>& output_buffer_specs,
     float sample_rate);
 
   private:

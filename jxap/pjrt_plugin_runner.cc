@@ -14,6 +14,7 @@
 #include "xla/pjrt/c/pjrt_c_api_cpu.h"
 
 #include "jxap/pjrt_plugin_runner.h"
+#include "jxap/utils.h"
 
 namespace jxap {
 namespace {
@@ -69,21 +70,6 @@ void LogAndDestroyError(PJRT_Error* error, const PJRT_Api* api) {
   if (!status_.ok()) { \
     return status_; \
   } \
-}
-
-absl::StatusOr<std::string> ReadMLIR(const std::string& path) {
-    std::string mlir_code;
-    std::ifstream mlir_file(path.c_str(), std::ios::in | std::ios::binary);
-    if (!mlir_file.is_open()) {
-      return absl::NotFoundError(absl::StrCat("Failed to open MLIR file: ", path));
-    }
-    std::stringstream mlir_code_stream;
-    mlir_code_stream << mlir_file.rdbuf();
-    if (mlir_code_stream.bad()) {
-        return absl::InternalError(absl::StrCat("Error while reading file: ", path));
-    }
-    LOG(INFO) << "MLIR code loaded from " << path << ".";
-    return mlir_code_stream.str();
 }
 
 }  // namespace
@@ -190,27 +176,15 @@ class PJRTExecutable {
     exec->api = ctx->api;
 
     // Load MLIR code
-    std::string mlir_code;
-    {
-      std::ifstream mlir_file(path.c_str(), std::ios::in | std::ios::binary);
-      if (!mlir_file.is_open()) {
-        return absl::NotFoundError(absl::StrCat("Failed to open MLIR file: ", path));
-      }
-      std::stringstream mlir_code_stream;
-      mlir_code_stream << mlir_file.rdbuf();
-      if (mlir_code_stream.bad()) {
-          return absl::InternalError(absl::StrCat("Error while reading file: ", path));
-      }
-      LOG(INFO) << "MLIR code loaded from " << path << ".";
-      mlir_code = mlir_code_stream.str();
-    }
+    absl::StatusOr<std::string> mlir_code = ReadFile(path.c_str());
+    RETURN_IF_ERROR(mlir_code.status());
   
-    // 4. Compile the MLIR program
+    // Compile the MLIR program
     PJRT_Program program_desc;
     program_desc.struct_size = PJRT_Program_STRUCT_SIZE;
     program_desc.extension_start = nullptr;
-    program_desc.code = const_cast<char*>(mlir_code.c_str());
-    program_desc.code_size = mlir_code.length();
+    program_desc.code = const_cast<char*>(mlir_code.value().c_str());
+    program_desc.code_size = mlir_code.value().length();
     const char* format_str = "mlir";
     program_desc.format = format_str;
     program_desc.format_size = strlen(format_str);
@@ -230,7 +204,7 @@ class PJRTExecutable {
     exec->loaded_executable = compile_args.executable;
     std::cout << "MLIR program compiled." << std::endl;
 
-    // 4.1 Get the PJRT_Executable to query properties
+    // Get the executable
     PJRT_LoadedExecutable_GetExecutable_Args get_exec_args;
     get_exec_args.struct_size = PJRT_LoadedExecutable_GetExecutable_Args_STRUCT_SIZE;
     get_exec_args.extension_start = nullptr;
@@ -283,6 +257,8 @@ class PJRTExecutable {
   }
 };
 
+PJRTPluginRunner::~PJRTPluginRunner() {}
+
 absl::StatusOr<std::unique_ptr<PJRTPluginRunner>> PJRTPluginRunner::LoadPlugin(absl::string_view path) {
   std::unique_ptr<PJRTPluginRunner> plugin(new PJRTPluginRunner());
 
@@ -290,14 +266,13 @@ absl::StatusOr<std::unique_ptr<PJRTPluginRunner>> PJRTPluginRunner::LoadPlugin(a
   RETURN_IF_ERROR(status_or_ctx.status());
   plugin->ctx_ = std::move(status_or_ctx.value());
   
-  absl::StatusOr<std::string> init_fn_mlir = ReadMLIR(absl::StrCat(path, "-init"));
+  absl::StatusOr<std::string> init_fn_mlir = ReadFile(absl::StrCat(path, "-init"));
   RETURN_IF_ERROR(init_fn_mlir.status());
   plugin->init_fn_mlir_ = std::move(init_fn_mlir.value());
 
-  absl::StatusOr<std::string> update_fn_mlir = ReadMLIR(absl::StrCat(path, "-update"));
+  absl::StatusOr<std::string> update_fn_mlir = ReadFile(absl::StrCat(path, "-update"));
   RETURN_IF_ERROR(update_fn_mlir.status());
   plugin->update_fn_mlir_ = std::move(update_fn_mlir.value());
-
 
   return plugin;
 }

@@ -1,11 +1,12 @@
 # --- Fetch and Build StableHLO ---
-message(STATUS "Building StableHLO")
+message(STATUS "Configuring StableHLO...")
 
 # --- Fetch the stablehlo sources ---
 FetchContent_Declare(
   stablehlo
   GIT_REPOSITORY https://github.com/openxla/stablehlo.git
   GIT_TAG a85bcc1
+  GIT_PROGRESS True
 )
 
 FetchContent_GetProperties(stablehlo)
@@ -24,24 +25,15 @@ file(READ ${LLVM_VERSION_FILE} LLVM_COMMIT_SHA)
 string(STRIP "${LLVM_COMMIT_SHA}" LLVM_COMMIT_SHA)
 message(STATUS "Required LLVM commit SHA for StableHLO: ${LLVM_COMMIT_SHA}")
 
-# --- Fetch LLVM (llvm-project) sources ---
+# --- Configure LLVM (llvm-project) sources ---
 message(STATUS "Configuring LLVM/MLIR...")
 FetchContent_Declare(
     llvm_project
     GIT_REPOSITORY https://github.com/llvm/llvm-project.git
-    GIT_TAG ${LLVM_COMMIT_SHA}
-    GIT_SHALLOW TRUE
+    GIT_TAG "${LLVM_COMMIT_SHA}"
+    GIT_PROGRESS True
     SOURCE_SUBDIR llvm # LLVM's main CMakeLists.txt is in the 'llvm' subdirectory
 )
-
-FetchContent_GetProperties(llvm_project)
-if(NOT llvm_project_POPULATED)
-    message(STATUS "Fetching LLVM sources...")
-    FetchContent_Populate(llvm_project)
-    message(STATUS "Fetching LVM sources... Done. Path: ${llvm_project_SOURCE_DIR}")
-endif()
-
-# --- Configure and make LLVM/MLIR available ---
 
 # LLVM/MLIR specific options (taken from build_mlir.sh)
 set(LLVM_INSTALL_UTILS ON CACHE BOOL "Install LLVM utilities")

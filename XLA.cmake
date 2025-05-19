@@ -15,6 +15,9 @@ set(XLA_PJRT_CPU_HDR_DST "${XLA_INSTALL_DIR}/include/xla/pjrt/c/pjrt_c_api_cpu.h
 set(XLA_PJRT_CPU_LIB_SRC "${XLA_BAZEL_BIN}/xla/pjrt/c/pjrt_c_api_cpu_plugin.so")
 set(XLA_PJRT_CPU_LIB_DST "${XLA_INSTALL_DIR}/lib/pjrt_c_api_cpu_plugin.so")
 
+# Make sure the include directory exists so that cmake doesn't fail.
+make_directory("${XLA_INSTALL_DIR}/include")
+
 ExternalProject_Add(xla_project
     GIT_REPOSITORY      https://github.com/openxla/xla.git
     GIT_TAG             fb601ce
@@ -66,13 +69,18 @@ add_custom_command(
     VERBATIM
 )
 
+add_custom_target(xla_custom_installed_artifacts
+    DEPENDS "${XLA_PJRT_API_HDR_DST}"
+            "${XLA_PJRT_CPU_HDR_DST}"
+            "${XLA_PJRT_CPU_LIB_DST}"
+)
+
 # PJRT C API
 add_library(XLA::pjrt_c_api INTERFACE IMPORTED)
 set_target_properties(XLA::pjrt_c_api PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${XLA_INSTALL_DIR}/include"
 )
-add_dependencies(XLA::pjrt_c_api
-    "${XLA_PJRT_API_HDR_DST}")
+add_dependencies(XLA::pjrt_c_api xla_custom_installed_artifacts)
 
 # PJRT CPU plugin
 add_library(XLA::pjrt_c_api_cpu SHARED IMPORTED)
@@ -80,6 +88,4 @@ set_target_properties(XLA::pjrt_c_api_cpu PROPERTIES
     IMPORTED_LOCATION             "${XLA_PJRT_CPU_LIB_DST}"
     INTERFACE_INCLUDE_DIRECTORIES "${XLA_INSTALL_DIR}/include"
 )
-add_dependencies(XLA::pjrt_c_api_cpu 
-    "${XLA_PJRT_CPU_HDR_DST}"
-    "${XLA_PJRT_CPU_LIB_DST}")
+add_dependencies(XLA::pjrt_c_api_cpu xla_custom_installed_artifacts)

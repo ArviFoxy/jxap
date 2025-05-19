@@ -5,11 +5,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Install dev tools and dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
     sudo \
     # Build tools.
-    clang \
-    lld \
+    build-essential \
     curl \
     gdb \
     cmake \
@@ -17,6 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     pkg-config \
     ccache \
+    # For the LLVM script.
+    wget \
+    lsb-release \
+    software-properties-common \
+    gnupg \
     # Python
     python3 \
     python3-pip \
@@ -27,10 +30,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Google Test dependencies (needed if building from source)
     libgtest-dev \
     # flatbuffers for JAX serialization
-    libflatbuffers-dev flatbuffers-compiler-dev \
-    # Cleanup
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    libflatbuffers-dev flatbuffers-compiler-dev
+
+# Install GCC 12 (default toolchain)
+RUN apt-get install -y --no-install-recommends gcc-12
+
+# Install LLVM
+RUN wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && ./llvm.sh 20 all
+RUN update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 1000
 
 # Compile and install Google Test from source provided by libgtest-dev
 # The Debian package only provides source, we need to build it.

@@ -1,7 +1,8 @@
-#include "gtest/gtest.h"
 #include "jxap/pjrt_plugin_runner.h"
 
 #include <memory>
+
+#include "gtest/gtest.h"
 
 namespace jxap {
 namespace {
@@ -13,5 +14,5 @@ TEST(PJRTPluginRunnerTest, PluginLoading) {
   ASSERT_TRUE(plugin_or_status.ok()) << plugin_or_status.status();
 }
 
-} // namespace
-} // namespace jxap
+}  // namespace
+}  // namespace jxap

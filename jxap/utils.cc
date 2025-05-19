@@ -1,8 +1,8 @@
+#include "jxap/utils.h"
+
 #include <fstream>
 
 #include "absl/strings/str_cat.h"
-
-#include "jxap/utils.h"
 
 namespace jxap {
 
@@ -14,11 +14,11 @@ absl::StatusOr<std::string> ReadFile(const std::filesystem::path& path) {
   std::stringstream string_stream;
   string_stream << file.rdbuf();
   if (string_stream.bad()) {
-      return absl::InternalError(absl::StrCat("Error while reading file: ", path.string()));
+    return absl::InternalError(absl::StrCat("Error while reading file: ", path.string()));
   }
   return string_stream.str();
 }
-  
+
 absl::Status WriteFile(const std::filesystem::path& path, const std::string& contents) {
   std::ofstream file(path.c_str(), std::ios::out | std::ios::binary);
   if (!file.is_open()) {
@@ -31,4 +31,4 @@ absl::Status WriteFile(const std::filesystem::path& path, const std::string& con
   return absl::OkStatus();
 }
 
-} // namespace jxap
+}  // namespace jxap

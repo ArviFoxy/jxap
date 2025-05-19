@@ -2,8 +2,8 @@
 #define JXAP_MLIR_PLUGIN
 
 #include <cstdint>
-#include <memory>
 #include <map>
+#include <memory>
 
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -47,33 +47,32 @@ class PJRTCompiledPlugin {
 
 /**
  * Audio plugin runner usig XLA's PJRT.
- * 
+ *
  * Loads StableHLO from `jax.export` and handles shape refining and JIT compilation.
  */
 class PJRTPluginRunner {
-  protected:
-   PJRTPluginRunner() = default;
- 
-  public:
-   ~PJRTPluginRunner();
+ protected:
+  PJRTPluginRunner() = default;
 
-   /**
-    * Loads the plugin from a jxap file.
-    */
-   static absl::StatusOr<std::unique_ptr<PJRTPluginRunner>> LoadPlugin(absl::string_view path);
+ public:
+  ~PJRTPluginRunner();
 
-   /**
-    * Compiles the plugin, filling in static buffer shapes.
-    */
-   absl::StatusOr<PJRTCompiledPlugin> Compile(
-    const std::map<std::string, AudioBufferSpec>& input_buffer_specs,
-    const std::map<std::string, AudioBufferSpec>& output_buffer_specs,
-    float sample_rate);
+  /**
+   * Loads the plugin from a jxap file.
+   */
+  static absl::StatusOr<std::unique_ptr<PJRTPluginRunner>> LoadPlugin(absl::string_view path);
 
-  private:
-   std::unique_ptr<PJRTContext> ctx_;
-   std::string init_fn_mlir_;
-   std::string update_fn_mlir_;
+  /**
+   * Compiles the plugin, filling in static buffer shapes.
+   */
+  absl::StatusOr<PJRTCompiledPlugin> Compile(
+      const std::map<std::string, AudioBufferSpec>& input_buffer_specs,
+      const std::map<std::string, AudioBufferSpec>& output_buffer_specs, float sample_rate);
+
+ private:
+  std::unique_ptr<PJRTContext> ctx_;
+  std::string init_fn_mlir_;
+  std::string update_fn_mlir_;
 };
 
 }  // namespace jxap

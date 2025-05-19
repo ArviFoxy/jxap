@@ -2,5 +2,5 @@ BasedOnStyle: Google
 IndentWidth: 2
 TabWidth: 4
 UseTab: Never
-ColumnLimit: 80
-NamespaceIndentation: Never
+ColumnLimit: 100
+NamespaceIndentation: None

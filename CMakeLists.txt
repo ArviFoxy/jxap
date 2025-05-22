@@ -18,14 +18,8 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-
-#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libstdc++-12")
-
 # Enable generation of compile_commands.json for tooling
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-# --- Options ---
-option(JXAP_ENABLE_LLD ON "Whether to use LLD for linking")
 
 # --- Enable CCACHE --- 
 find_program(CCACHE_EXECUTABLE ccache)
@@ -62,50 +56,52 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE) # Needed on Windows, harmless elsewhere
 FetchContent_MakeAvailable(googletest)
 
-include(XLA.cmake)
 include(StableHLO.cmake)
+include(XLA.cmake)
+
+# --- Directories ---
+
+message(STATUS "Adding include dir: ${CMAKE_CURRENT_SOURCE_DIR}")
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 # --- Targets ---
-
-# StableHLO rewriter.
-message(STATUS "Building StableHLO rewriter")
 
 # PJRT plugin runner.
 message(STATUS "Building PJRT plugin runner")
 add_library(pjrt_plugin_runner STATIC
     jxap/utils.h
     jxap/utils.cc
-    jxap/hlo_opt.h
-    jxap/hlo_opt.cc
+    jxap/stablehlo_passes.h
+    jxap/stablehlo_passes.cc
     jxap/pjrt_plugin_runner.h
     jxap/pjrt_plugin_runner.cc
 )
+llvm_update_compile_flags(pjrt_plugin_runner)
 target_link_libraries(pjrt_plugin_runner 
     PRIVATE
     absl::strings
     absl::log
     XLA::pjrt_c_api
     XLA::pjrt_c_api_cpu
+    StablehloOps
+    StablehloReferenceApi
+    StablehloPasses
+
     PUBLIC
     absl::status
     absl::statusor
 )
-target_include_directories(pjrt_plugin_runner PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
-)
+mlir_check_all_link_libraries(pjrt_plugin_runner)
 
 # --- Testing ---
 message(STATUS "Building tests [working dir ${CMAKE_CURRENT_BINARY_DIR}]")
 
 add_executable(pjrt_plugin_runner_tests
-    jxap/hlo_opt_test.cc
+    jxap/stablehlo_passes.cc
     jxap/pjrt_plugin_runner_test.cc)
 target_link_libraries(pjrt_plugin_runner_tests PRIVATE
     GTest::gtest_main
     pjrt_plugin_runner
-)
-target_include_directories(pjrt_plugin_runner_tests PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 add_test_data_files(
     pjrt_plugin_runner_tests

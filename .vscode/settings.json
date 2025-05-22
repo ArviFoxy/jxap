@@ -114,6 +114,8 @@
     "typeinfo": "cpp",
     "variant": "cpp",
     "filesystem": "cpp",
-    "codecvt": "cpp"
+    "codecvt": "cpp",
+    "sim_vector": "cpp",
+    "*.inc": "cpp"
   },
 }

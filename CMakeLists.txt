@@ -21,6 +21,10 @@ set(CMAKE_C_EXTENSIONS OFF)
 # Enable generation of compile_commands.json for tooling
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Disable RRTI to match LLVM
+set(NO_RTTI "-fno-rtti")
+add_definitions(${NO_RTTI})
+
 # --- Enable CCACHE --- 
 find_program(CCACHE_EXECUTABLE ccache)
 if(CCACHE_EXECUTABLE)
@@ -67,6 +71,17 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 # --- Targets ---
 
 # PJRT plugin runner.
+message(STATUS "Building MLIR passes")
+add_llvm_library(jxap_mlir_passes STATIC
+    jxap/replace_arg_with_constant_pass.h
+    jxap/replace_arg_with_constant_pass.cc)
+target_link_libraries(jxap_mlir_passes
+    PUBLIC
+    MLIRPass
+)
+llvm_update_compile_flags(jxap_mlir_passes)
+mlir_check_all_link_libraries(jxap_mlir_passes)
+
 message(STATUS "Building PJRT plugin runner")
 add_library(pjrt_plugin_runner STATIC
     jxap/utils.h
@@ -76,7 +91,6 @@ add_library(pjrt_plugin_runner STATIC
     jxap/pjrt_plugin_runner.h
     jxap/pjrt_plugin_runner.cc
 )
-llvm_update_compile_flags(pjrt_plugin_runner)
 target_link_libraries(pjrt_plugin_runner 
     PRIVATE
     absl::strings
@@ -86,13 +100,15 @@ target_link_libraries(pjrt_plugin_runner
     XLA::pjrt_c_api_cpu
 
     StablehloOps
-    StablehloReferenceApi
     StablehloPasses
+
+    jxap_mlir_passes
 
     PUBLIC
     absl::status
     absl::statusor
 )
+llvm_update_compile_flags(pjrt_plugin_runner)
 mlir_check_all_link_libraries(pjrt_plugin_runner)
 
 # --- Testing ---
@@ -110,6 +126,8 @@ add_test_data_files(
     "jxap/testdata/test_plugin.jxap-init"
     "jxap/testdata/test_plugin.jxap-update"
 )
+llvm_update_compile_flags(pjrt_plugin_runner_tests)
+mlir_check_all_link_libraries(pjrt_plugin_runner_tests)
 
 include(GoogleTest)
 gtest_discover_tests(pjrt_plugin_runner_tests

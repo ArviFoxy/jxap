@@ -15,16 +15,16 @@ namespace {
 
 const std::string kTestMlirPath = "jxap/testdata/test_plugin.jxap-init";
 
-TEST(StablehloTest, RefineTypes) {
+TEST(StablehloTest, TransformArguments) {
   auto mlir = ReadFile(kTestMlirPath);
   ASSERT_TRUE(mlir.ok()) << mlir.status();
 
-  std::vector<std::string> input_types = {
-      MlirTensorType({}, "i32"),    // platform index
-      MlirTensorType({32}, "f32"),  // input audio buffer
-      MlirTensorType({}, "f32"),    // sampling rate scalar
+  std::vector<ArgumentTransform> transforms = {
+      RefineType(MlirTensorType({}, "i32")),    // platform index
+      RefineType(MlirTensorType({32}, "f32")),  // input audio buffer
+      ReplaceWithConstant(44100.f),             // sampling rate scalar
   };
-  auto output = RefineInputTypes(mlir.value(), input_types);
+  auto output = MlirTransformArguments(mlir.value(), transforms);
   ASSERT_TRUE(output.ok()) << output.status();
 
   LOG(INFO) << "MLIR output:\n" << output.value();

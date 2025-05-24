@@ -16,11 +16,30 @@ namespace jxap {
  */
 std::string MlirTensorType(const std::vector<int64_t>& shape, absl::string_view dtype);
 
+// Replaces an argument with a constant.
+struct ReplaceWithConstant {
+  float value;
+
+  ReplaceWithConstant(float value) : value(value) {}
+};
+
+// Refines an arguments type.
+struct RefineType {
+  std::string type;
+
+  RefineType(const std::string& type) : type(type) {}
+};
+
+using ArgumentTransform = std::variant<ReplaceWithConstant, RefineType>;
+
 /**
- * Refines input types to static shapes and removes dynamicism from the MLIR.
+ * Applies passes to an MLIR function to:
+ *   - Refines input types to static shapes.
+ *   - Inlines constant arguments.
+ *   - Removes dynamicism from the MLIR whenever possible.
  */
-absl::StatusOr<std::string> RefineInputTypes(absl::string_view mlir_code,
-                                             const std::vector<std::string>& mlir_types);
+absl::StatusOr<std::string> MlirTransformArguments(
+    absl::string_view mlir_code, const std::vector<ArgumentTransform>& transforms);
 
 }  // namespace jxap
 

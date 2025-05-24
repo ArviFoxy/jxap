@@ -297,14 +297,14 @@ absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(
   compiled_plugin->buffer_size_ = buffer_size;
   compiled_plugin->sample_rate_ = sample_rate;
 
-  std::vector<std::string> input_types;
-  input_types.push_back(MlirTensorType({}, "i32"));  // platform index
+  std::vector<ArgumentTransform> transforms;
+  transforms.push_back(RefineType(MlirTensorType({}, "i32")));  // platform index
   for (const std::string& _ : input_buffers) {
-    input_types.push_back(MlirTensorType({buffer_size}, "f32"));
+    transforms.push_back(RefineType(MlirTensorType({buffer_size}, "f32")));
   }
-  input_types.push_back(MlirTensorType({}, "f32"));  // sample rate
+  transforms.push_back(ReplaceWithConstant(sample_rate));  // sample rate
 
-  auto status_or_init_mlir = RefineInputTypes(init_fn_mlir_, input_types);
+  auto status_or_init_mlir = MlirTransformArguments(init_fn_mlir_, transforms);
   RETURN_IF_ERROR(status_or_init_mlir.status());
   std::string init_mlir = status_or_init_mlir.value();
 

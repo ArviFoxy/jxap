@@ -131,6 +131,15 @@
     "locale": "cpp",
     "print": "cpp",
     "queue": "cpp",
-    "stack": "cpp"
+    "stack": "cpp",
+    "chrono": "cpp",
+    "scoped_allocator": "cpp",
+    "charconv": "cpp",
+    "__hash_table": "cpp",
+    "complex": "cpp",
+    "forward_list": "cpp",
+    "regex": "cpp",
+    "expected": "cpp",
+    "list": "cpp"
   },
 }

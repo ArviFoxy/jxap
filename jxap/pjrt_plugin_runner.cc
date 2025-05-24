@@ -16,6 +16,7 @@
 #include "jxap/utils.h"
 #include "xla/pjrt/c/pjrt_c_api.h"
 #include "xla/pjrt/c/pjrt_c_api_cpu.h"
+#include "xla/pjrt/proto/compile_options.pb.h"
 
 namespace jxap {
 namespace {
@@ -189,10 +190,18 @@ class PJRTExecutable {
     compile_args.extension_start = nullptr;
     compile_args.client = ctx->client;
     compile_args.program = &program_desc;
-    // compile_options is a serialized CompileOptionsProto. For default
-    // optimizations:
-    compile_args.compile_options = nullptr;
-    compile_args.compile_options_size = 0;
+    // Compile options
+    xla::CompileOptionsProto compile_options;
+    xla::ExecutableBuildOptionsProto* build_options =
+        compile_options.mutable_executable_build_options();
+    build_options->set_num_replicas(1);
+    build_options->set_num_partitions(1);
+    build_options->set_optimization_level(xla::ExecutionOptions_EffortLevel_EFFORT_O2);
+    build_options->set_memory_fitting_level(xla::ExecutionOptions_EffortLevel_EFFORT_O2);
+    compile_options.set_compile_portable_executable(false);
+    std::string compile_options_str = compile_options.SerializeAsString();
+    compile_args.compile_options = compile_options_str.c_str();
+    compile_args.compile_options_size = compile_options_str.length();
     // Output field:
     compile_args.executable = nullptr;
 

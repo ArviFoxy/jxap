@@ -30,7 +30,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Google Test dependencies (needed if building from source)
     libgtest-dev \
     # flatbuffers for JAX serialization
-    libflatbuffers-dev flatbuffers-compiler-dev
+    libflatbuffers-dev flatbuffers-compiler-dev \
+    # Protocol buffers
+    libprotobuf-dev
 
 # Install GCC 12 (default toolchain)
 RUN apt-get install -y --no-install-recommends gcc-12

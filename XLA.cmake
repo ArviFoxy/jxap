@@ -1,29 +1,38 @@
 message(STATUS "Building XLA")
 set(XLA_SOURCE_DIR ${CMAKE_BINARY_DIR}/xla_src)
-set(XLA_INSTALL_DIR ${CMAKE_BINARY_DIR}/xla_install)
 set(XLA_BAZEL_BIN ${XLA_SOURCE_DIR}/bazel-bin)
 set(XLA_BAZEL_TARGETS
     "//xla/pjrt/c:pjrt_c_api.h"
     "//xla/pjrt/c:pjrt_c_api_cpu_plugin.so"
-    "//xla/pjrt/proto:compile_options_proto"
+    "//xla:autotuning_proto_cc_impl"
+    "//xla:autotune_results_proto_cc_impl"
+    "//xla:xla_proto_cc_impl"
+    "//xla:xla_data_proto_cc_impl"
+    "//xla/service:hlo_proto_cc_impl"
+    "//xla/service:metrics_proto_cc_impl"
+    "//xla/tsl/protobuf:dnn_proto_cc_impl"
+    "//xla/stream_executor:device_description_proto_cc_impl"
+    "//xla/stream_executor/cuda:cuda_compute_capability_proto_cc_impl"
+    "//xla/pjrt/proto:compile_options_proto_cc_impl"
 )
 
-set(XLA_PJRT_API_HDR_SRC "${XLA_SOURCE_DIR}/xla/pjrt/c/pjrt_c_api.h")
-set(XLA_PJRT_API_HDR_DST "${XLA_INSTALL_DIR}/include/xla/pjrt/c/pjrt_c_api.h")
-set(XLA_PJRT_CPU_HDR_SRC "${XLA_SOURCE_DIR}/xla/pjrt/c/pjrt_c_api_cpu.h")
-set(XLA_PJRT_CPU_HDR_DST "${XLA_INSTALL_DIR}/include/xla/pjrt/c/pjrt_c_api_cpu.h")
-set(XLA_PJRT_CPU_LIB_SRC "${XLA_BAZEL_BIN}/xla/pjrt/c/pjrt_c_api_cpu_plugin.so")
-set(XLA_PJRT_CPU_LIB_DST "${XLA_INSTALL_DIR}/lib/pjrt_c_api_cpu_plugin.so")
-
-# Make sure the include directory exists so that cmake doesn't fail.
-make_directory("${XLA_INSTALL_DIR}/include")
+set(XLA_PJRT_CPU_LIB "${XLA_BAZEL_BIN}/xla/pjrt/c/pjrt_c_api_cpu_plugin.so")
+set(XLA_AUTOTUNING_PROTO_LIB "${XLA_BAZEL_BIN}/xla/libautotuning_proto_cc_impl.so")
+set(XLA_AUTOTUNE_RESULTS_PROTO_LIB "${XLA_BAZEL_BIN}/xla/libautotune_results_proto_cc_impl.so")
+set(XLA_XLA_PROTO_LIB "${XLA_BAZEL_BIN}/xla/libxla_proto_cc_impl.so")
+set(XLA_XLA_DATA_PROTO_LIB "${XLA_BAZEL_BIN}/xla/libxla_data_proto_cc_impl.so")
+set(XLA_SERVICE_HLO_PROTO_LIB "${XLA_BAZEL_BIN}/xla/service/libhlo_proto_cc_impl.so")
+set(XLA_SERVICE_METRICS_PROTO_LIB "${XLA_BAZEL_BIN}/xla/service/libmetrics_proto_cc_impl.so")
+set(XLA_DNN_PROTO_LIB "${XLA_BAZEL_BIN}/xla/tsl/protobuf/libdnn_proto_cc_impl.so")
+set(XLA_STREAM_EXECUTOR_DEVICE_DESCRIPTION_PROTO_LIB "${XLA_BAZEL_BIN}/xla/stream_executor/libdevice_description_proto_cc_impl.so")
+set(XLA_STREAM_EXECUTOR_CUDA_CUDA_DEVICE_CAPABILITY_PROTO_LIB "${XLA_BAZEL_BIN}/xla/stream_executor/cuda/libcuda_compute_capability_proto_cc_impl.so")
+set(XLA_COMPILE_OPTIONS_PROTO_LIB "${XLA_BAZEL_BIN}/xla/pjrt/proto/libcompile_options_proto_cc_impl.so")
 
 ExternalProject_Add(xla_project
     GIT_REPOSITORY      https://github.com/openxla/xla.git
     GIT_TAG             fb601ce
     BUILD_IN_SOURCE     True
     SOURCE_DIR          ${XLA_SOURCE_DIR}
-    INSTALL_DIR         ${XLA_INSTALL_DIR}
 
     GIT_PROGRESS        True  # Show git clone progress
     USES_TERMINAL_BUILD True  # Show build output
@@ -34,58 +43,71 @@ ExternalProject_Add(xla_project
     BUILD_COMMAND       ${CMAKE_COMMAND} -E rm -rf bazel-bin &&
                         bazel build --spawn_strategy=sandboxed ${XLA_BAZEL_TARGETS}
                         WORKING_DIRECTORY ${XLA_SOURCE_DIR}
-    BUILD_BYPRODUCTS    "${XLA_BAZEL_BIN}/xla/pjrt/c/pjrt_c_api_cpu_plugin.so"
-                        "${XLA_BAZEL_BIN}/xla/tools/xla-opt"
+    BUILD_BYPRODUCTS    "${XLA_PJRT_CPU_LIB}"
+                        "${XLA_AUTOTUNING_PROTO_LIB}"
+                        "${XLA_AUTOTUNE_RESULTS_PROTO_LIB}"
+                        "${XLA_XLA_PROTO_LIB}"
+                        "${XLA_XLA_DATA_PROTO_LIB}"
+                        "${XLA_SERVICE_HLO_PROTO_LIB}"
+                        "${XLA_SERVICE_METRICS_PROTO_LIB}"
+                        "${XLA_DNN_PROTO_LIB}"
+                        "${XLA_STREAM_EXECUTOR_DEVICE_DESCRIPTION_PROTO_LIB}"
+                        "${XLA_STREAM_EXECUTOR_CUDA_CUDA_DEVICE_CAPABILITY_PROTO_LIB}"
+                        "${XLA_COMPILE_OPTIONS_PROTO_LIB}"
 
-    # TODO: somehow INSTALL_BYPRODUCTS is not correctly picked up by ninja. As a workaround
-    # we create the rules manually with add_custom_command.
     INSTALL_COMMAND     ""
-)
-
-add_custom_command(
-    OUTPUT  "${XLA_PJRT_API_HDR_DST}"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${XLA_INSTALL_DIR}/include/xla/pjrt/c"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${XLA_PJRT_API_HDR_SRC}" "${XLA_PJRT_API_HDR_DST}"
-    DEPENDS xla_project
-    COMMENT "Copying XLA PJRT API header to ${XLA_PJRT_API_HDR_DST}"
-    VERBATIM
-)
-
-add_custom_command(
-    OUTPUT  "${XLA_PJRT_CPU_HDR_DST}"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${XLA_INSTALL_DIR}/include/xla/pjrt/c"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${XLA_PJRT_CPU_HDR_SRC}" "${XLA_PJRT_CPU_HDR_DST}"
-    DEPENDS xla_project
-    COMMENT "Copying XLA PJRT CPU header to ${XLA_PJRT_CPU_HDR_DST}"
-    VERBATIM
-)
-
-add_custom_command(
-    OUTPUT  "${XLA_PJRT_CPU_LIB_DST}"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${XLA_INSTALL_DIR}/lib"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${XLA_PJRT_CPU_LIB_SRC}" "${XLA_PJRT_CPU_LIB_DST}"
-    DEPENDS "${XLA_PJRT_CPU_LIB_SRC}"
-    COMMENT "Copying XLA PJRT CPU library to ${XLA_PJRT_CPU_LIB_DST}"
-    VERBATIM
-)
-
-add_custom_target(xla_custom_installed_artifacts
-    DEPENDS "${XLA_PJRT_API_HDR_DST}"
-            "${XLA_PJRT_CPU_HDR_DST}"
-            "${XLA_PJRT_CPU_LIB_DST}"
 )
 
 # PJRT C API
 add_library(XLA::pjrt_c_api INTERFACE IMPORTED)
 set_target_properties(XLA::pjrt_c_api PROPERTIES
-    INTERFACE_INCLUDE_DIRECTORIES "${XLA_INSTALL_DIR}/include"
+    INTERFACE_INCLUDE_DIRECTORIES "${XLA_SOURCE_DIR}"
 )
-add_dependencies(XLA::pjrt_c_api xla_custom_installed_artifacts)
+add_dependencies(XLA::pjrt_c_api xla_project)
 
 # PJRT CPU plugin
 add_library(XLA::pjrt_c_api_cpu SHARED IMPORTED)
 set_target_properties(XLA::pjrt_c_api_cpu PROPERTIES
-    IMPORTED_LOCATION             "${XLA_PJRT_CPU_LIB_DST}"
-    INTERFACE_INCLUDE_DIRECTORIES "${XLA_INSTALL_DIR}/include"
+    IMPORTED_LOCATION             "${XLA_PJRT_CPU_LIB}"
+    INTERFACE_INCLUDE_DIRECTORIES "${XLA_SOURCE_DIR}"
 )
-add_dependencies(XLA::pjrt_c_api_cpu xla_custom_installed_artifacts)
+add_dependencies(XLA::pjrt_c_api_cpu xla_project)
+
+# Protos
+function(add_xla_proto_library target_name so_file)
+    add_library(${target_name} SHARED IMPORTED)
+    set_target_properties(${target_name} PROPERTIES
+        IMPORTED_LOCATION             "${so_file}"
+        INTERFACE_INCLUDE_DIRECTORIES "${XLA_BAZEL_BIN}"
+    )
+    add_dependencies(${target_name} xla_project)
+endfunction()
+
+add_xla_proto_library(XLA::autotuning_proto_cc "${XLA_AUTOTUNING_PROTO_LIB}")
+add_xla_proto_library(XLA::autotune_results_proto_cc "${XLA_AUTOTUNE_RESULTS_PROTO_LIB}")
+add_xla_proto_library(XLA::xla_proto_cc "${XLA_XLA_PROTO_LIB}")
+add_xla_proto_library(XLA::xla_data_proto_cc "${XLA_XLA_DATA_PROTO_LIB}")
+add_xla_proto_library(XLA::xla_service_hlo_proto_cc "${XLA_SERVICE_HLO_PROTO_LIB}")
+add_xla_proto_library(XLA::xla_service_metrics_proto_cc "${XLA_SERVICE_METRICS_PROTO_LIB}")
+add_xla_proto_library(XLA::xla_dnn_proto_cc "${XLA_DNN_PROTO_LIB}")
+add_xla_proto_library(XLA::xla_streaming_executor_device_description_proto_cc "${XLA_STREAM_EXECUTOR_DEVICE_DESCRIPTION_PROTO_LIB}")
+add_xla_proto_library(XLA::xla_streaming_executor_cuda_cuda_device_capability_proto_cc "${XLA_STREAM_EXECUTOR_CUDA_CUDA_DEVICE_CAPABILITY_PROTO_LIB}")
+add_xla_proto_library(XLA::compile_options_proto_cc "${XLA_COMPILE_OPTIONS_PROTO_LIB}")
+
+add_library(XLA_protos INTERFACE)
+target_link_libraries(XLA_protos
+    INTERFACE
+    "-Wl,--start-group"
+    XLA::autotuning_proto_cc
+    XLA::autotune_results_proto_cc
+    XLA::xla_proto_cc
+    XLA::xla_data_proto_cc
+    XLA::xla_service_hlo_proto_cc
+    XLA::xla_service_metrics_proto_cc
+    XLA::xla_dnn_proto_cc
+    XLA::xla_streaming_executor_device_description_proto_cc
+    XLA::xla_streaming_executor_cuda_cuda_device_capability_proto_cc
+    XLA::compile_options_proto_cc
+    "-Wl,--end-group"
+    protobuf::libprotobuf
+)

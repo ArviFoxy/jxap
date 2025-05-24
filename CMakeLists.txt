@@ -60,6 +60,9 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE) # Needed on Windows, harmless elsewhere
 FetchContent_MakeAvailable(googletest)
 
+# Protocol buffers
+find_package(Protobuf REQUIRED)
+
 include(StableHLO.cmake)
 include(XLA.cmake)
 
@@ -98,6 +101,7 @@ target_link_libraries(pjrt_plugin_runner
 
     XLA::pjrt_c_api
     XLA::pjrt_c_api_cpu
+    XLA_protos
 
     StablehloOps
     StablehloPasses

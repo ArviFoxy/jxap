@@ -20,9 +20,9 @@ TEST(StablehloTest, RefineTypes) {
   ASSERT_TRUE(mlir.ok()) << mlir.status();
 
   std::vector<std::string> input_types = {
-      MlirTensorType({}, "i32"),       // platform index
-      MlirTensorType({32, 2}, "f32"),  // input audio buffer
-      MlirTensorType({}, "f32"),       // sampling rate scalar
+      MlirTensorType({}, "i32"),    // platform index
+      MlirTensorType({32}, "f32"),  // input audio buffer
+      MlirTensorType({}, "f32"),    // sampling rate scalar
   };
   auto output = RefineInputTypes(mlir.value(), input_types);
   ASSERT_TRUE(output.ok()) << output.status();

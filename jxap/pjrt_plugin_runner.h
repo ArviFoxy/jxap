@@ -2,8 +2,8 @@
 #define JXAP_MLIR_PLUGIN
 
 #include <cstdint>
-#include <map>
 #include <memory>
+#include <set>
 
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -14,14 +14,6 @@ class PJRTContext;
 class PJRTExecutable;
 class PJRTPluginRunner;
 
-/**
- * Specification of an audio buffer size.
- */
-struct AudioBufferSpec {
-  int32_t num_channels;
-  int32_t buffer_size;
-};
-
 class PJRTCompiledPlugin {
  protected:
   PJRTCompiledPlugin() = default;
@@ -30,17 +22,19 @@ class PJRTCompiledPlugin {
  public:
   ~PJRTCompiledPlugin();
 
-  const std::map<std::string, AudioBufferSpec>& input_buffer_specs() const {
-    return input_buffer_specs_;
-  }
+  int buffer_size() const { return buffer_size_; }
 
-  const std::map<std::string, AudioBufferSpec>& output_buffer_specs() const {
-    return output_buffer_specs_;
-  }
+  float sample_rate() const { return sample_rate_; }
+
+  const std::set<std::string>& input_buffers() const { return input_buffers_; }
+
+  const std::set<std::string>& output_buffers() const { return output_buffers_; }
 
  private:
-  std::map<std::string, AudioBufferSpec> input_buffer_specs_;
-  std::map<std::string, AudioBufferSpec> output_buffer_specs_;
+  int buffer_size_;
+  float sample_rate_;
+  std::set<std::string> input_buffers_;
+  std::set<std::string> output_buffers_;
   std::unique_ptr<PJRTExecutable> init_fn_;
   std::unique_ptr<PJRTExecutable> update_fn_;
 };
@@ -65,9 +59,9 @@ class PJRTPluginRunner {
   /**
    * Compiles the plugin, filling in static buffer shapes.
    */
-  absl::StatusOr<PJRTCompiledPlugin> Compile(
-      const std::map<std::string, AudioBufferSpec>& input_buffer_specs,
-      const std::map<std::string, AudioBufferSpec>& output_buffer_specs, float sample_rate);
+  absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> Compile(
+      const std::set<std::string>& input_buffers, const std::set<std::string>& output_buffers,
+      int buffer_size, float sample_rate);
 
  private:
   std::unique_ptr<PJRTContext> ctx_;

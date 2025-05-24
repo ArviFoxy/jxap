@@ -12,6 +12,7 @@
 #include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "jxap/stablehlo_passes.h"
 #include "jxap/utils.h"
 #include "xla/pjrt/c/pjrt_c_api.h"
 #include "xla/pjrt/c/pjrt_c_api_cpu.h"
@@ -168,20 +169,17 @@ class PJRTExecutable {
   PJRTExecutable() = default;
 
  public:
-  static absl::StatusOr<std::unique_ptr<PJRTExecutable>> Load(std::string path, PJRTContext* ctx) {
+  static absl::StatusOr<std::unique_ptr<PJRTExecutable>> Load(const std::string& mlir_code,
+                                                              PJRTContext* ctx) {
     std::unique_ptr<PJRTExecutable> exec(new PJRTExecutable());
     exec->api = ctx->api;
-
-    // Load MLIR code
-    absl::StatusOr<std::string> mlir_code = ReadFile(path.c_str());
-    RETURN_IF_ERROR(mlir_code.status());
 
     // Compile the MLIR program
     PJRT_Program program_desc;
     program_desc.struct_size = PJRT_Program_STRUCT_SIZE;
     program_desc.extension_start = nullptr;
-    program_desc.code = const_cast<char*>(mlir_code.value().c_str());
-    program_desc.code_size = mlir_code.value().length();
+    program_desc.code = const_cast<char*>(mlir_code.c_str());
+    program_desc.code_size = mlir_code.length();
     const char* format_str = "mlir";
     program_desc.format = format_str;
     program_desc.format_size = strlen(format_str);
@@ -267,6 +265,8 @@ class PJRTExecutable {
   }
 };
 
+PJRTCompiledPlugin::~PJRTCompiledPlugin() {}
+
 PJRTPluginRunner::~PJRTPluginRunner() {}
 
 absl::StatusOr<std::unique_ptr<PJRTPluginRunner>> PJRTPluginRunner::LoadPlugin(
@@ -286,6 +286,33 @@ absl::StatusOr<std::unique_ptr<PJRTPluginRunner>> PJRTPluginRunner::LoadPlugin(
   plugin->update_fn_mlir_ = std::move(update_fn_mlir.value());
 
   return plugin;
+}
+
+absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(
+    const std::set<std::string>& input_buffers, const std::set<std::string>& output_buffers,
+    int buffer_size, float sample_rate) {
+  std::unique_ptr<PJRTCompiledPlugin> compiled_plugin(new PJRTCompiledPlugin());
+  compiled_plugin->input_buffers_ = input_buffers;
+  compiled_plugin->output_buffers_ = output_buffers;
+  compiled_plugin->buffer_size_ = buffer_size;
+  compiled_plugin->sample_rate_ = sample_rate;
+
+  std::vector<std::string> input_types;
+  input_types.push_back(MlirTensorType({}, "i32"));  // platform index
+  for (const std::string& _ : input_buffers) {
+    input_types.push_back(MlirTensorType({buffer_size}, "f32"));
+  }
+  input_types.push_back(MlirTensorType({}, "f32"));  // sample rate
+
+  auto status_or_init_mlir = RefineInputTypes(init_fn_mlir_, input_types);
+  RETURN_IF_ERROR(status_or_init_mlir.status());
+  std::string init_mlir = status_or_init_mlir.value();
+
+  auto status_or_init_excutable = PJRTExecutable::Load(init_mlir, ctx_.get());
+  RETURN_IF_ERROR(status_or_init_excutable.status());
+  compiled_plugin->init_fn_ = std::move(status_or_init_excutable.value());
+
+  return compiled_plugin;
 }
 
 }  // namespace jxap

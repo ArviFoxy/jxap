@@ -8,7 +8,7 @@ import equinox as eqx
 from jaxtyping import Array, Float
 
 # Audio buffer type.
-Buffer = Float[Array, "BufferSize NumChannels"]
+Buffer = Float[Array, "BufferSize"]
 
 # Re-exported for convenience.
 Module = eqx.Module

@@ -27,9 +27,9 @@ class TestPlugin(types.Plugin[TestPluginState]):
 
     def init(self, inputs: dict[str, types.Buffer],
              sample_rate) -> TestPluginState:
+        del inputs  # Unused.
         del sample_rate  # Unused.
-        x = inputs["input"]
-        return TestPluginState(last_sample=jnp.zeros_like(x[0]))
+        return TestPluginState(last_sample=jnp.array(0.0))
 
     def update(self, state: TestPluginState, inputs: dict[str, types.Buffer]):
         x = inputs["input"]

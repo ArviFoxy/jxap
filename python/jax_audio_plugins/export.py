@@ -22,32 +22,22 @@ class _Scope:
     jax_scope: jax.export.SymbolicScope
     dtype: np.dtype
     buffer_size: DimSize
-    num_channels: dict[str, DimSize]
 
 
-def _make_scope(plugin: types.Plugin, dtype: np.dtype = np.float32):
+def _make_scope(dtype: np.dtype = np.float32):
     buffer_size = "BufferSize"
-    num_channels = {
-        s: f"NumChannels{i}" for i, s in enumerate(plugin.input_buffer_names)
-    }
-    scope = jax.export.SymbolicScope(
-        [f"{buffer_size} >= 1"] +
-        [f"{var} >= 1" for var in num_channels.values()])
+    scope = jax.export.SymbolicScope([f"{buffer_size} >= 1"])
     return _Scope(jax_scope=scope,
                   dtype=dtype,
                   buffer_size=jax.export.symbolic_shape(buffer_size,
-                                                        scope=scope)[0],
-                  num_channels={
-                      k: jax.export.symbolic_shape(v, scope=scope)[0]
-                      for k, v in num_channels.items()
-                  })
+                                                        scope=scope)[0])
 
 
 def _get_init_args_shape(plugin: types.Plugin, scope: _Scope):
     buffer_shapes = {}
     for input_name in plugin.input_buffer_names:
-        buffer_shapes[input_name] = jax.ShapeDtypeStruct(
-            (scope.buffer_size, scope.num_channels[input_name]), scope.dtype)
+        buffer_shapes[input_name] = jax.ShapeDtypeStruct((scope.buffer_size,),
+                                                         scope.dtype)
     sample_rate_shape = jax.ShapeDtypeStruct((), scope.dtype)
     return buffer_shapes, sample_rate_shape
 
@@ -59,8 +49,8 @@ def _get_update_args_shape(
 ) -> tuple[jax.export.SymbolicScope, Any]:
     buffer_shapes = {}
     for input_name in plugin.input_buffer_names:
-        buffer_shapes[input_name] = jax.ShapeDtypeStruct(
-            (scope.buffer_size, scope.num_channels[input_name]), scope.dtype)
+        buffer_shapes[input_name] = jax.ShapeDtypeStruct((scope.buffer_size,),
+                                                         scope.dtype)
     return state_shape, buffer_shapes
 
 
@@ -84,7 +74,7 @@ def export_plugin(plugin: types.Plugin,
         platforms = _ALL_PLATFORMS
 
     logging.info("Exporting plugin %s:", type(plugin))
-    scope = _make_scope(plugin, dtype)
+    scope = _make_scope(dtype)
 
     state_tree_def = _TreeDefClosure()
 

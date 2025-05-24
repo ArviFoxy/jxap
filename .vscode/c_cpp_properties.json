@@ -3,9 +3,13 @@
     {
       "name": "Linux",
       "includePath": [
-        "${workspaceFolder}/**"
+        "${workspaceFolder}/**",
+        "/usr/include",
+        "/usr/local/include",
       ],
       "defines": [],
+      "cStandard": "c17",
+      "cppStandard": "c++17",
       "compilerPath": "/usr/bin/gcc"
     }
   ],

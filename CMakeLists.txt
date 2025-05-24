@@ -14,7 +14,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
@@ -81,8 +81,10 @@ target_link_libraries(pjrt_plugin_runner
     PRIVATE
     absl::strings
     absl::log
+
     XLA::pjrt_c_api
     XLA::pjrt_c_api_cpu
+
     StablehloOps
     StablehloReferenceApi
     StablehloPasses
@@ -97,7 +99,7 @@ mlir_check_all_link_libraries(pjrt_plugin_runner)
 message(STATUS "Building tests [working dir ${CMAKE_CURRENT_BINARY_DIR}]")
 
 add_executable(pjrt_plugin_runner_tests
-    jxap/stablehlo_passes.cc
+    jxap/stablehlo_passes_test.cc
     jxap/pjrt_plugin_runner_test.cc)
 target_link_libraries(pjrt_plugin_runner_tests PRIVATE
     GTest::gtest_main

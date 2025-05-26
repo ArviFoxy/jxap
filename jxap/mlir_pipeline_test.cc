@@ -1,4 +1,4 @@
-#include "jxap/stablehlo_passes.h"
+#include "jxap/mlir_pipeline.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -15,7 +15,7 @@ namespace {
 
 const std::string kTestMlirPath = "jxap/testdata/test_plugin.jxap-init";
 
-TEST(StablehloTest, TransformArguments) {
+TEST(MlirPipeline, TransformArguments) {
   auto mlir = ReadFile(kTestMlirPath);
   ASSERT_TRUE(mlir.ok()) << mlir.status();
 

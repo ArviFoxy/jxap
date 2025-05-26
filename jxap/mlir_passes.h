@@ -6,6 +6,8 @@
 namespace jxap {
 
 std::unique_ptr<::mlir::Pass> createReplaceFuncArgWithConstantPass(
-    unsigned int arg_index, float constant_float_value, std::string target_function_name);
+    std::map<unsigned int, float> arg_to_value, std::string target_function_name);
+
+std::unique_ptr<::mlir::Pass> createRemoveShapeAssertionsPass();
 
 }  // namespace jxap

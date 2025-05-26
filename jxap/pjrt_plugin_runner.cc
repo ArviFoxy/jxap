@@ -12,7 +12,7 @@
 #include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
-#include "jxap/stablehlo_passes.h"
+#include "jxap/mlir_pipeline.h"
 #include "jxap/utils.h"
 #include "xla/pjrt/c/pjrt_c_api.h"
 #include "xla/pjrt/c/pjrt_c_api_cpu.h"

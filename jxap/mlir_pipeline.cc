@@ -1,4 +1,4 @@
-#include "jxap/stablehlo_passes.h"
+#include "jxap/mlir_pipeline.h"
 
 #include <filesystem>
 #include <fstream>
@@ -9,7 +9,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
-#include "jxap/replace_arg_with_constant_pass.h"
+#include "jxap/mlir_passes.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
@@ -93,15 +93,15 @@ absl::StatusOr<std::string> MlirTransformArguments(
   pm.getContext()->printOpOnDiagnostic(false);
 
   // Pass 1: replace constants.
-  unsigned argument_index = 0;
-  for (const auto& transform : transforms) {
-    if (std::holds_alternative<ReplaceWithConstant>(transform)) {
-      const auto& replace_with_constant = std::get<ReplaceWithConstant>(transform);
-      pm.addPass(createReplaceFuncArgWithConstantPass(argument_index, replace_with_constant.value,
-                                                      kMainFnName));
-    } else {
-      argument_index += 1;
+  std::map<unsigned int, float> arg_to_value;
+  for (unsigned int i = 0; i < transforms.size(); i++) {
+    if (std::holds_alternative<ReplaceWithConstant>(transforms[i])) {
+      const auto& replace_with_constant = std::get<ReplaceWithConstant>(transforms[i]);
+      arg_to_value[i] = replace_with_constant.value;
     }
+  }
+  if (!arg_to_value.empty()) {
+    pm.addPass(createReplaceFuncArgWithConstantPass(arg_to_value, kMainFnName));
   }
   // Pass 2: refine program input shapes to be static.
   pm.addPass(mlir::stablehlo::createStablehloRefineArgumentsPass(parsed_types));
@@ -109,7 +109,9 @@ absl::StatusOr<std::string> MlirTransformArguments(
   pm.addPass(mlir::stablehlo::createStablehloRefineShapesPass());
   // Pass 4: replaces dynamic shape ops with static shape ops if possible.
   pm.addPass(mlir::stablehlo::createStablehloCanonicalizeDynamismPass());
-  // Pass 5: simplify and propagate constants.
+  // Pass 5: remove shape assertions.
+  pm.addPass(createRemoveShapeAssertionsPass());
+  // Pass 6: simplify and propagate constants.
   pm.addPass(mlir::stablehlo::createStablehloAggressiveSimplificationPass());
 
   if (mlir::failed(pm.run(*module))) {

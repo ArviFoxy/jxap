@@ -76,8 +76,8 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 # PJRT plugin runner.
 message(STATUS "Building MLIR passes")
 add_llvm_library(jxap_mlir_passes STATIC
-    jxap/replace_arg_with_constant_pass.h
-    jxap/replace_arg_with_constant_pass.cc)
+    jxap/mlir_passes.h
+    jxap/mlir_passes.cc)
 target_link_libraries(jxap_mlir_passes
     PUBLIC
     MLIRPass
@@ -86,15 +86,15 @@ llvm_update_compile_flags(jxap_mlir_passes)
 mlir_check_all_link_libraries(jxap_mlir_passes)
 
 message(STATUS "Building PJRT plugin runner")
-add_library(pjrt_plugin_runner STATIC
+add_library(jxap_pjrt_plugin_runner STATIC
     jxap/utils.h
     jxap/utils.cc
-    jxap/stablehlo_passes.h
-    jxap/stablehlo_passes.cc
+    jxap/mlir_pipeline.h
+    jxap/mlir_pipeline.cc
     jxap/pjrt_plugin_runner.h
     jxap/pjrt_plugin_runner.cc
 )
-target_link_libraries(pjrt_plugin_runner 
+target_link_libraries(jxap_pjrt_plugin_runner 
     PRIVATE
     absl::strings
     absl::log
@@ -112,29 +112,29 @@ target_link_libraries(pjrt_plugin_runner
     absl::status
     absl::statusor
 )
-llvm_update_compile_flags(pjrt_plugin_runner)
-mlir_check_all_link_libraries(pjrt_plugin_runner)
+llvm_update_compile_flags(jxap_pjrt_plugin_runner)
+mlir_check_all_link_libraries(jxap_pjrt_plugin_runner)
 
 # --- Testing ---
 message(STATUS "Building tests [working dir ${CMAKE_CURRENT_BINARY_DIR}]")
 
-add_executable(pjrt_plugin_runner_tests
-    jxap/stablehlo_passes_test.cc
+add_executable(jxap_pjrt_plugin_runner_tests
+    jxap/mlir_pipeline_test.cc
     jxap/pjrt_plugin_runner_test.cc)
-target_link_libraries(pjrt_plugin_runner_tests PRIVATE
+target_link_libraries(jxap_pjrt_plugin_runner_tests PRIVATE
     GTest::gtest_main
-    pjrt_plugin_runner
+    jxap_pjrt_plugin_runner
 )
 add_test_data_files(
-    pjrt_plugin_runner_tests
+    jxap_pjrt_plugin_runner_tests
     "jxap/testdata/test_plugin.jxap-init"
     "jxap/testdata/test_plugin.jxap-update"
 )
-llvm_update_compile_flags(pjrt_plugin_runner_tests)
-mlir_check_all_link_libraries(pjrt_plugin_runner_tests)
+llvm_update_compile_flags(jxap_pjrt_plugin_runner_tests)
+mlir_check_all_link_libraries(jxap_pjrt_plugin_runner_tests)
 
 include(GoogleTest)
-gtest_discover_tests(pjrt_plugin_runner_tests
+gtest_discover_tests(jxap_pjrt_plugin_runner_tests
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 

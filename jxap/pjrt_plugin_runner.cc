@@ -313,7 +313,7 @@ absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(
   }
   transforms.push_back(ReplaceWithConstant(sample_rate));  // sample rate
 
-  auto status_or_init_mlir = MlirTransformArguments(init_fn_mlir_, transforms);
+  auto status_or_init_mlir = MlirPipeline(init_fn_mlir_, transforms);
   RETURN_IF_ERROR(status_or_init_mlir.status());
   std::string init_mlir = status_or_init_mlir.value();
 

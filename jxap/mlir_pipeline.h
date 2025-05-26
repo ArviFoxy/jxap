@@ -38,9 +38,11 @@ using ArgumentTransform = std::variant<ReplaceWithConstant, RefineType>;
  *   - Refines input types to static shapes.
  *   - Inlines constant arguments.
  *   - Removes dynamicism from the MLIR whenever possible.
+ *   - Remove shape assertions.
+ *   - Optimize the output.
  */
-absl::StatusOr<std::string> MlirTransformArguments(
-    absl::string_view mlir_code, const std::vector<ArgumentTransform>& transforms);
+absl::StatusOr<std::string> MlirPipeline(absl::string_view mlir_code,
+                                         const std::vector<ArgumentTransform>& transforms);
 
 }  // namespace jxap
 

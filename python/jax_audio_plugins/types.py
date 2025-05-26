@@ -32,12 +32,14 @@ class Plugin(Protocol, Generic[PluginState]):
         self,
         state: PluginState,
         inputs: Mapping[str, Buffer],
+        sample_rate: Float[Array, ""],
     ) -> tuple[PluginState, Mapping[str, Buffer]]:
         """Processes a frame of audio data.
         
         Args:
           state: State of the plugin.
           inputs: Input buffers.
+          sample_rate: Sample rate.
   
         Returns:
           New state and output buffers.

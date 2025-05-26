@@ -40,8 +40,8 @@ std::string MlirTensorType(const std::vector<int64_t>& shape, absl::string_view 
   return absl::StrCat("tensor<", absl::StrJoin(parts, "x"), ">");
 }
 
-absl::StatusOr<std::string> MlirTransformArguments(
-    absl::string_view mlir_code, const std::vector<ArgumentTransform>& transforms) {
+absl::StatusOr<std::string> MlirPipeline(absl::string_view mlir_code,
+                                         const std::vector<ArgumentTransform>& transforms) {
   mlir::DialectRegistry registry;
   registry.insert<mlir::BuiltinDialect>();
   registry.insert<mlir::func::FuncDialect>();

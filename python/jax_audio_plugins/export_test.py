@@ -31,7 +31,9 @@ class TestPlugin(types.Plugin[TestPluginState]):
         del sample_rate  # Unused.
         return TestPluginState(last_sample=jnp.array(0.0))
 
-    def update(self, state: TestPluginState, inputs: dict[str, types.Buffer]):
+    def update(self, state: TestPluginState, inputs: dict[str, types.Buffer],
+               sample_rate):
+        del sample_rate  # Unused.
         x = inputs["input"]
         x_1 = jnp.concatenate([x[1:], state.last_sample[jnp.newaxis]], axis=0)
         y = x + x_1

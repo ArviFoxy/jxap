@@ -51,7 +51,8 @@ def _get_update_args_shape(
     for input_name in plugin.input_buffer_names:
         buffer_shapes[input_name] = jax.ShapeDtypeStruct((scope.buffer_size,),
                                                          scope.dtype)
-    return state_shape, buffer_shapes
+    sample_rate_shape = jax.ShapeDtypeStruct((), scope.dtype)
+    return state_shape, buffer_shapes, sample_rate_shape
 
 
 class _TreeDefClosure:
@@ -96,9 +97,9 @@ def export_plugin(plugin: types.Plugin,
     with open(init_path, 'w', encoding='utf-8') as out_file:
         out_file.write(exported_init_fn.mlir_module())
 
-    def _update_fn(state, buffers):
+    def _update_fn(state, buffers, sample_rate):
         state = jax.tree.unflatten(state_tree_def.tree_def, state)
-        new_state, outputs = plugin.update(state, buffers)
+        new_state, outputs = plugin.update(state, buffers, sample_rate)
         new_state, _ = jax.tree.flatten(new_state)
         return new_state, outputs
 

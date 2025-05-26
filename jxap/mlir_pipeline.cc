@@ -40,8 +40,9 @@ std::string MlirTensorType(const std::vector<int64_t>& shape, absl::string_view 
   return absl::StrCat("tensor<", absl::StrJoin(parts, "x"), ">");
 }
 
-absl::StatusOr<std::string> MlirPipeline(absl::string_view mlir_code,
-                                         const std::vector<ArgumentTransform>& transforms) {
+absl::StatusOr<std::string> MlirPipeline(
+    absl::string_view mlir_code, const std::vector<ArgumentTransform>& transforms,
+    const std::map<std::string, ScalarValue>& global_constants) {
   mlir::DialectRegistry registry;
   registry.insert<mlir::BuiltinDialect>();
   registry.insert<mlir::func::FuncDialect>();
@@ -92,7 +93,7 @@ absl::StatusOr<std::string> MlirPipeline(absl::string_view mlir_code,
   // Disable printing ops on diagnostics as we capture them manually
   pm.getContext()->printOpOnDiagnostic(false);
 
-  // Pass 1: replace constants.
+  // Pass 1: replace constant arguments.
   std::map<unsigned int, float> arg_to_value;
   for (unsigned int i = 0; i < transforms.size(); i++) {
     if (std::holds_alternative<ReplaceWithConstant>(transforms[i])) {
@@ -105,13 +106,15 @@ absl::StatusOr<std::string> MlirPipeline(absl::string_view mlir_code,
   }
   // Pass 2: refine program input shapes to be static.
   pm.addPass(mlir::stablehlo::createStablehloRefineArgumentsPass(parsed_types));
-  // Pass 3: propagates static shapes across the program.
+  // Pass 3: replace global jax constants.
+  pm.addPass(createReplaceGlobalConstantsPass(global_constants));
+  // Pass 4: propagates static shapes across the program.
   pm.addPass(mlir::stablehlo::createStablehloRefineShapesPass());
-  // Pass 4: replaces dynamic shape ops with static shape ops if possible.
-  pm.addPass(mlir::stablehlo::createStablehloCanonicalizeDynamismPass());
   // Pass 5: remove shape assertions.
   pm.addPass(createRemoveShapeAssertionsPass());
-  // Pass 6: simplify and propagate constants.
+  // Pass 6: replaces dynamic shape ops with static shape ops if possible.
+  pm.addPass(mlir::stablehlo::createStablehloCanonicalizeDynamismPass());
+  // Pass 7: simplify and propagate constants.
   pm.addPass(mlir::stablehlo::createStablehloAggressiveSimplificationPass());
 
   if (mlir::failed(pm.run(*module))) {

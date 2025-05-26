@@ -25,7 +25,9 @@ TEST(MlirPipeline, PipelineTestPluginInit) {
       RefineType(MlirTensorType({32}, "f32")),  // input audio buffer
       ReplaceWithConstant(44100.f),             // sampling rate scalar
   };
-  auto output = MlirPipeline(mlir.value(), transforms);
+  std::map<std::string, ScalarValue> global_to_value;
+  global_to_value["BufferSize"] = 32;
+  auto output = MlirPipeline(mlir.value(), transforms, global_to_value);
   ASSERT_TRUE(output.ok()) << output.status();
 
   LOG(INFO) << "MLIR output:\n" << output.value();
@@ -37,11 +39,14 @@ TEST(MlirPipeline, PipelineTestPluginUpdate) {
 
   std::vector<ArgumentTransform> transforms = {
       RefineType(MlirTensorType({}, "i32")),    // platform index
-      RefineType(MlirTensorType({}, "f32")),    // plugin state
+      RefineType(MlirTensorType({}, "f32")),    // plugin state 1
+      RefineType(MlirTensorType({32}, "f32")),  // plugin state 2
       RefineType(MlirTensorType({32}, "f32")),  // input audio buffer
       ReplaceWithConstant(44100.f),             // sampling rate scalar
   };
-  auto output = MlirPipeline(mlir.value(), transforms);
+  std::map<std::string, ScalarValue> global_to_value;
+  global_to_value["BufferSize"] = 32;
+  auto output = MlirPipeline(mlir.value(), transforms, global_to_value);
   ASSERT_TRUE(output.ok()) << output.status();
 
   LOG(INFO) << "MLIR output:\n" << output.value();

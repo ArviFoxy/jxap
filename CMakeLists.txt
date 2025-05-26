@@ -75,12 +75,15 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 # PJRT plugin runner.
 message(STATUS "Building MLIR passes")
-add_llvm_library(jxap_mlir_passes STATIC
+add_library(jxap_mlir_passes STATIC
     jxap/mlir_passes.h
     jxap/mlir_passes.cc)
 target_link_libraries(jxap_mlir_passes
     PUBLIC
     MLIRPass
+
+    PRIVATE
+    absl::log
 )
 llvm_update_compile_flags(jxap_mlir_passes)
 mlir_check_all_link_libraries(jxap_mlir_passes)
@@ -99,18 +102,17 @@ target_link_libraries(jxap_pjrt_plugin_runner
     absl::strings
     absl::log
 
-    XLA::pjrt_c_api
     XLA::pjrt_c_api_cpu
     XLA_protos
 
     StablehloOps
     StablehloPasses
 
-    jxap_mlir_passes
-
     PUBLIC
+    XLA::pjrt_c_api
     absl::status
     absl::statusor
+    jxap_mlir_passes
 )
 llvm_update_compile_flags(jxap_pjrt_plugin_runner)
 mlir_check_all_link_libraries(jxap_pjrt_plugin_runner)

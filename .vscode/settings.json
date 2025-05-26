@@ -140,6 +140,7 @@
     "forward_list": "cpp",
     "regex": "cpp",
     "expected": "cpp",
-    "list": "cpp"
+    "list": "cpp",
+    "sim_stl_pair": "cpp"
   },
 }

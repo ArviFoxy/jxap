@@ -12,6 +12,7 @@
 #include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "jxap/mlir_pipeline.h"
 #include "jxap/utils.h"
 #include "xla/pjrt/c/pjrt_c_api.h"
@@ -272,6 +273,51 @@ class PJRTExecutable {
     LOG(INFO) << "-------------------------------------------------------------"
                  "-------------------";
   }
+
+  absl::StatusOr<size_t> SizeOfGeneratedCodeInBytes() const {
+    PJRT_Executable_SizeOfGeneratedCodeInBytes_Args size_args;
+    size_args.struct_size = PJRT_Executable_SizeOfGeneratedCodeInBytes_Args_STRUCT_SIZE;
+    size_args.extension_start = nullptr;
+    size_args.executable = executable;
+    RETURN_IF_PJRT_ERROR(api->PJRT_Executable_SizeOfGeneratedCodeInBytes(&size_args), api);
+    return size_args.size_in_bytes;
+  }
+
+  absl::StatusOr<int> NumOutputs() const {
+    PJRT_Executable_NumOutputs_Args num_outputs_args;
+    num_outputs_args.struct_size = PJRT_Executable_NumOutputs_Args_STRUCT_SIZE;
+    num_outputs_args.extension_start = nullptr;
+    num_outputs_args.executable = executable;
+    RETURN_IF_PJRT_ERROR(api->PJRT_Executable_NumOutputs(&num_outputs_args), api);
+    size_t num_outputs = num_outputs_args.num_outputs;
+    return num_outputs;
+  }
+
+  absl::StatusOr<std::vector<PJRT_Buffer_Type>> OutputElementTypes() const {
+    PJRT_Executable_OutputElementTypes_Args types_args;
+    types_args.struct_size = PJRT_Executable_OutputElementTypes_Args_STRUCT_SIZE;
+    types_args.extension_start = nullptr;
+    types_args.executable = executable;
+    RETURN_IF_PJRT_ERROR(api->PJRT_Executable_OutputElementTypes(&types_args), api);
+    return std::vector<PJRT_Buffer_Type>(types_args.output_types,
+                                         types_args.output_types + types_args.num_output_types);
+  }
+
+  absl::StatusOr<std::vector<std::vector<int64_t>>> OutputDimensions() const {
+    PJRT_Executable_OutputDimensions_Args dims_args;
+    dims_args.struct_size = PJRT_Executable_OutputDimensions_Args_STRUCT_SIZE;
+    dims_args.extension_start = nullptr;
+    dims_args.executable = executable;
+    RETURN_IF_PJRT_ERROR(api->PJRT_Executable_OutputDimensions(&dims_args), api);
+    std::vector<std::vector<int64_t>> dims;
+    size_t offset = 0;
+    for (size_t i = 0; i < dims_args.num_outputs; ++i) {
+      dims.push_back(std::vector<int64_t>(dims_args.dims + offset,
+                                          dims_args.dims + offset + dims_args.dim_sizes[i]));
+      offset += dims_args.dim_sizes[i];
+    }
+    return dims;
+  }
 };
 
 PJRTCompiledPlugin::~PJRTCompiledPlugin() {}
@@ -281,6 +327,7 @@ PJRTPluginRunner::~PJRTPluginRunner() {}
 absl::StatusOr<std::unique_ptr<PJRTPluginRunner>> PJRTPluginRunner::LoadPlugin(
     absl::string_view path) {
   std::unique_ptr<PJRTPluginRunner> plugin(new PJRTPluginRunner());
+  plugin->path_ = path;
 
   absl::StatusOr<std::unique_ptr<PJRTContext>> status_or_ctx = PJRTContext::Create();
   RETURN_IF_ERROR(status_or_ctx.status());
@@ -313,13 +360,46 @@ absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(
   }
   transforms.push_back(ReplaceWithConstant(sample_rate));  // sample rate
 
-  auto status_or_init_mlir = MlirPipeline(init_fn_mlir_, transforms);
+  std::map<std::string, ScalarValue> global_to_value;
+  global_to_value["BufferSize"] = buffer_size;
+
+  auto status_or_init_mlir = MlirPipeline(init_fn_mlir_, transforms, global_to_value);
   RETURN_IF_ERROR(status_or_init_mlir.status());
   std::string init_mlir = status_or_init_mlir.value();
+  LOG(INFO) << "Compiling plugin init method MLIR:\n" << init_mlir;
 
   auto status_or_init_excutable = PJRTExecutable::Load(init_mlir, ctx_.get());
   RETURN_IF_ERROR(status_or_init_excutable.status());
   compiled_plugin->init_fn_ = std::move(status_or_init_excutable.value());
+  compiled_plugin->init_fn_->PrintStats(path_, "init");
+
+  auto status_or_code_size = compiled_plugin->init_fn_->SizeOfGeneratedCodeInBytes();
+  RETURN_IF_ERROR(status_or_code_size.status());
+  LOG(INFO) << "Plugin init code size: " << status_or_code_size.value();
+
+  auto status_or_num_outputs = compiled_plugin->init_fn_->NumOutputs();
+  RETURN_IF_ERROR(status_or_num_outputs.status());
+  size_t num_outputs = status_or_num_outputs.value();
+  LOG(INFO) << "Plugin state size: " << num_outputs;
+
+  // Get the shapes and dtypes of the plugin state.
+  auto status_or_element_types = compiled_plugin->init_fn_->OutputElementTypes();
+  RETURN_IF_ERROR(status_or_element_types.status());
+  const auto& element_types = status_or_element_types.value();
+  auto status_or_dimensions = compiled_plugin->init_fn_->OutputDimensions();
+  RETURN_IF_ERROR(status_or_dimensions.status());
+  const auto& dimensions = status_or_dimensions.value();
+  for (size_t i = 0; i < num_outputs; ++i) {
+    std::vector<std::string> dim_strs;
+    for (int64_t dim : dimensions[i]) {
+      dim_strs.push_back(std::to_string(dim));
+    }
+    LOG(INFO) << "State tensor " << i << " dtype: " << element_types[i] << " shape: ["
+              << absl::StrJoin(dim_strs, ",") << "]";
+  }
+  compiled_plugin->state_size_ = num_outputs;
+  compiled_plugin->state_types_ = element_types;
+  compiled_plugin->state_dimensions_ = dimensions;
 
   return compiled_plugin;
 }
@@ -360,22 +440,6 @@ int main() {
     PJRT_Device* device = nullptr;
 
     try {
-        // 4.2 Get number of outputs to prepare output buffer structure
-        PJRT_Executable_NumOutputs_Args num_outputs_args;
-        num_outputs_args.struct_size =
-PJRT_Executable_NumOutputs_Args_STRUCT_SIZE; num_outputs_args.extension_start =
-nullptr; num_outputs_args.executable = underlying_executable;
-        CheckError(api->PJRT_Executable_NumOutputs(&num_outputs_args), api,
-"PJRT_Executable_NumOutputs"); size_t num_outputs_per_device =
-num_outputs_args.num_outputs;
-
-        if (num_outputs_per_device != 1) { // This example specifically expects
-one output throw std::runtime_error("Example requires 1 output, but MLIR model
-has " + std::to_string(num_outputs_per_device));
-        }
-        std::cout << "Executable has " << num_outputs_per_device << " output(s)
-per device." << std::endl;
-
         // 5. Prepare input data
         std::vector<float> host_input_data = {10.0f, 20.0f, 30.0f, 40.0f};
         const int64_t input_dims[] = {static_cast<long

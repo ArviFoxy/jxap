@@ -1,11 +1,13 @@
 #ifndef JXAP_STABLEHLO_PASSES
 #define JXAP_STABLEHLO_PASSES
 
+#include <map>
 #include <string>
 #include <vector>
 
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "jxap/mlir_passes.h"
 
 namespace jxap {
 
@@ -37,12 +39,14 @@ using ArgumentTransform = std::variant<ReplaceWithConstant, RefineType>;
  * Applies passes to an MLIR function to:
  *   - Refines input types to static shapes.
  *   - Inlines constant arguments.
+ *   - Replaces `jax.global_constant` arguments with constants.
  *   - Removes dynamicism from the MLIR whenever possible.
  *   - Remove shape assertions.
  *   - Optimize the output.
  */
-absl::StatusOr<std::string> MlirPipeline(absl::string_view mlir_code,
-                                         const std::vector<ArgumentTransform>& transforms);
+absl::StatusOr<std::string> MlirPipeline(
+    absl::string_view mlir_code, const std::vector<ArgumentTransform>& transforms,
+    const std::map<std::string, ScalarValue>& global_constants);
 
 }  // namespace jxap
 

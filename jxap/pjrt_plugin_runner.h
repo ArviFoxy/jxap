@@ -7,6 +7,7 @@
 
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "xla/pjrt/c/pjrt_c_api.h"
 
 namespace jxap {
 
@@ -33,8 +34,14 @@ class PJRTCompiledPlugin {
  private:
   int buffer_size_;
   float sample_rate_;
+
+  size_t state_size_;
+  std::vector<PJRT_Buffer_Type> state_types_;
+  std::vector<std::vector<int64_t>> state_dimensions_;
+
   std::set<std::string> input_buffers_;
   std::set<std::string> output_buffers_;
+
   std::unique_ptr<PJRTExecutable> init_fn_;
   std::unique_ptr<PJRTExecutable> update_fn_;
 };
@@ -65,6 +72,7 @@ class PJRTPluginRunner {
 
  private:
   std::unique_ptr<PJRTContext> ctx_;
+  std::string path_;
   std::string init_fn_mlir_;
   std::string update_fn_mlir_;
 };

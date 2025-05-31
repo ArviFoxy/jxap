@@ -47,14 +47,37 @@ TEST(PJRTPluginRunnerTest, CompilesAndRunsPlugin) {
     ASSERT_TRUE(status.ok()) << status;
     LOG(INFO) << "Update done.";
 
-    // check the output
-    std::span<float> output_view(reinterpret_cast<float*>(output_buffers[0].data()), buffer_size);
-    LOG(INFO) << "Outputs: " << output_view[0] << ", " << output_view[1] << ", " << output_view[2]
-              << ", " << output_view[3];
-    ASSERT_FLOAT_EQ(output_view[0], 1.0f);
-    ASSERT_FLOAT_EQ(output_view[1], 2.0f);
-    ASSERT_FLOAT_EQ(output_view[2], 2.0f);
-    ASSERT_FLOAT_EQ(output_view[3], 2.0f);
+    {
+      // check the output
+      std::span<float> output_view(reinterpret_cast<float*>(output_buffers[0].data()), buffer_size);
+      LOG(INFO) << "Outputs: " << output_view[0] << ", " << output_view[1] << ", " << output_view[2]
+                << ", " << output_view[3];
+      ASSERT_FLOAT_EQ(output_view[0], 1.0f);
+      ASSERT_FLOAT_EQ(output_view[1], 2.0f);
+      ASSERT_FLOAT_EQ(output_view[2], 2.0f);
+      ASSERT_FLOAT_EQ(output_view[3], 2.0f);
+    }
+
+    input_view[0] = 0.0f;
+    input_view[1] = 1.0f;
+    input_view[2] = 2.0f;
+    input_view[3] = 2.0f;
+
+    LOG(INFO) << "Running update.";
+    status = compiled_plugin->Update(input_buffers, &state, &output_buffers);
+    ASSERT_TRUE(status.ok()) << status;
+    LOG(INFO) << "Update done.";
+
+    {
+      // check the output
+      std::span<float> output_view(reinterpret_cast<float*>(output_buffers[0].data()), buffer_size);
+      LOG(INFO) << "Outputs: " << output_view[0] << ", " << output_view[1] << ", " << output_view[2]
+                << ", " << output_view[3];
+      ASSERT_FLOAT_EQ(output_view[0], 2.0f);
+      ASSERT_FLOAT_EQ(output_view[1], 2.0f);
+      ASSERT_FLOAT_EQ(output_view[2], 4.0f);
+      ASSERT_FLOAT_EQ(output_view[3], 5.0f);
+    }
   }
 }
 

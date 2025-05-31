@@ -21,6 +21,8 @@ class PJRTPluginRunner;
 using Buffer = std::vector<std::byte>;
 // Reference to a memory buffer.
 using BufferRef = std::span<std::byte>;
+// State of a plugin.
+using PluginState = std::vector<Buffer>;
 
 class PJRTCompiledPlugin {
  protected:
@@ -38,15 +40,14 @@ class PJRTCompiledPlugin {
 
   const std::set<std::string>& output_buffer_names() const { return output_buffer_names_; }
 
-  // Initializes the state of the plugin.
-  // Takes ownership of the input buffers to avoid copying.
-  absl::Status Init(std::vector<Buffer>&& inputs);
+  // Initializes an instance of the plugin.
+  absl::StatusOr<PluginState> Init(std::vector<Buffer> inputs) const;
 
   // Updates the state of the plugin.
   // Takes ownership of the input buffers to avoid copying.
-  // The output buffers are passed to the callback and only live for the duration of this call.
-  absl::Status Update(std::vector<Buffer>&& inputs,
-                      std::function<absl::Status(const std::vector<BufferRef>&)> callback);
+  // Writes the outputs to the output buffers (resizing them if needed).
+  absl::Status Update(std::vector<Buffer>&& inputs, PluginState* state,
+                      std::vector<Buffer>* outputs) const;
 
  private:
   PJRTContext* ctx_;
@@ -64,9 +65,6 @@ class PJRTCompiledPlugin {
 
   std::unique_ptr<PJRTExecutable> init_fn_;
   std::unique_ptr<PJRTExecutable> update_fn_;
-
-  bool initialized_ = false;
-  std::vector<std::vector<std::byte>> state_;
 };
 
 /**

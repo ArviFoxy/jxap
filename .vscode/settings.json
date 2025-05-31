@@ -147,6 +147,8 @@
     "ranges": "cpp",
     "valarray": "cpp",
     "unordered_set": "cpp",
-    "alignedvector3": "cpp"
+    "alignedvector3": "cpp",
+    "propagate_const": "cpp",
+    "future": "cpp"
   },
 }

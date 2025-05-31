@@ -4,6 +4,7 @@
 #include <cstring>  // For strlen
 #include <fstream>
 #include <iostream>
+#include <source_location>
 #include <stdexcept>  // For std::runtime_error
 #include <string>
 #include <vector>
@@ -55,22 +56,30 @@ void LogAndDestroyError(PJRT_Error* error, const PJRT_Api* api) {
   DestroyError(error, api);
 }
 
-#define RETURN_IF_PJRT_ERROR(error_expr, api)           \
-  {                                                     \
-    PJRT_Error* error = error_expr;                     \
-    if (error != nullptr) {                             \
-      absl::Status status_ = ErrorToStatus(error, api); \
-      DestroyError(error, api);                         \
-      return status_;                                   \
-    }                                                   \
+absl::Status AppendLocToStatus(absl::Status status, std::source_location loc) {
+  return absl::Status(status.code(),
+                      absl::StrCat(status.message(), "\nTraceback: ", loc.file_name(), ":",
+                                   loc.line(), " in function ", loc.function_name(), "."));
+}
+
+#define RETURN_IF_PJRT_ERROR(error_expr, api)               \
+  {                                                         \
+    PJRT_Error* error = error_expr;                         \
+    if (error != nullptr) {                                 \
+      absl::Status status_ = ErrorToStatus(error, api);     \
+      DestroyError(error, api);                             \
+      constexpr auto loc = std::source_location::current(); \
+      return AppendLocToStatus(status_, loc);               \
+    }                                                       \
   }
 
-#define RETURN_IF_ERROR(status_expr)    \
-  {                                     \
-    absl::Status status_ = status_expr; \
-    if (!status_.ok()) {                \
-      return status_;                   \
-    }                                   \
+#define RETURN_IF_ERROR(status_expr)                        \
+  {                                                         \
+    absl::Status status_ = status_expr;                     \
+    if (!status_.ok()) {                                    \
+      constexpr auto loc = std::source_location::current(); \
+      return AppendLocToStatus(status_, loc);               \
+    }                                                       \
   }
 
 absl::Status PJRTAwaitAndDestroyEvent(PJRT_Event* event, const PJRT_Api* api) {
@@ -177,167 +186,6 @@ class PJRTContext {
   }
 };
 
-class PJRTExecutable {
- public:
-  // Not owned.
-  const PJRT_Api* api = nullptr;
-  // Owned and destroyed by this object.
-  PJRT_LoadedExecutable* loaded_executable = nullptr;
-  PJRT_Executable* executable = nullptr;
-
- protected:
-  PJRTExecutable() = default;
-
- public:
-  static absl::StatusOr<std::unique_ptr<PJRTExecutable>> Load(const std::string& mlir_code,
-                                                              PJRTContext* ctx) {
-    std::unique_ptr<PJRTExecutable> exec(new PJRTExecutable());
-    exec->api = ctx->api;
-
-    // Compile the MLIR program
-    PJRT_Program program_desc;
-    program_desc.struct_size = PJRT_Program_STRUCT_SIZE;
-    program_desc.extension_start = nullptr;
-    program_desc.code = const_cast<char*>(mlir_code.c_str());
-    program_desc.code_size = mlir_code.length();
-    const char* format_str = "mlir";
-    program_desc.format = format_str;
-    program_desc.format_size = strlen(format_str);
-
-    PJRT_Client_Compile_Args compile_args;
-    compile_args.struct_size = PJRT_Client_Compile_Args_STRUCT_SIZE;
-    compile_args.extension_start = nullptr;
-    compile_args.client = ctx->client;
-    compile_args.program = &program_desc;
-    // Compile options
-    xla::CompileOptionsProto compile_options;
-    xla::ExecutableBuildOptionsProto* build_options =
-        compile_options.mutable_executable_build_options();
-    build_options->set_num_replicas(1);
-    build_options->set_num_partitions(1);
-    build_options->set_optimization_level(xla::ExecutionOptions_EffortLevel_EFFORT_O2);
-    build_options->set_memory_fitting_level(xla::ExecutionOptions_EffortLevel_EFFORT_O2);
-    compile_options.set_compile_portable_executable(false);
-    std::string compile_options_str = compile_options.SerializeAsString();
-    compile_args.compile_options = compile_options_str.c_str();
-    compile_args.compile_options_size = compile_options_str.length();
-    // Output field:
-    compile_args.executable = nullptr;
-
-    RETURN_IF_PJRT_ERROR(ctx->api->PJRT_Client_Compile(&compile_args), ctx->api);
-    exec->loaded_executable = compile_args.executable;
-    std::cout << "MLIR program compiled." << std::endl;
-
-    // Get the executable
-    PJRT_LoadedExecutable_GetExecutable_Args get_exec_args;
-    get_exec_args.struct_size = PJRT_LoadedExecutable_GetExecutable_Args_STRUCT_SIZE;
-    get_exec_args.extension_start = nullptr;
-    get_exec_args.loaded_executable = exec->loaded_executable;
-    RETURN_IF_PJRT_ERROR(ctx->api->PJRT_LoadedExecutable_GetExecutable(&get_exec_args), ctx->api);
-    exec->executable = get_exec_args.executable;
-
-    return exec;
-  }
-
-  ~PJRTExecutable() {
-    if (executable != nullptr) {
-      PJRT_Executable_Destroy_Args destroy_exec_args;
-      destroy_exec_args.struct_size = PJRT_Executable_Destroy_Args_STRUCT_SIZE;
-      destroy_exec_args.extension_start = nullptr;
-      destroy_exec_args.executable = executable;
-      LogAndDestroyError(api->PJRT_Executable_Destroy(&destroy_exec_args), api);
-    }
-    if (loaded_executable != nullptr) {
-      PJRT_LoadedExecutable_Destroy_Args destroy_exec_args;
-      destroy_exec_args.struct_size = PJRT_LoadedExecutable_Destroy_Args_STRUCT_SIZE;
-      destroy_exec_args.extension_start = nullptr;
-      destroy_exec_args.executable = loaded_executable;
-      LogAndDestroyError(api->PJRT_LoadedExecutable_Destroy(&destroy_exec_args), api);
-    }
-  }
-
-  void PrintStats(absl::string_view path, absl::string_view method) const {
-    if (executable == nullptr) return;
-
-    PJRT_Executable_GetCompiledMemoryStats_Args stats_args;
-    stats_args.struct_size = PJRT_Executable_GetCompiledMemoryStats_Args_STRUCT_SIZE;
-    stats_args.extension_start = nullptr;
-    stats_args.executable = executable;
-    LogAndDestroyError(api->PJRT_Executable_GetCompiledMemoryStats(&stats_args), api);
-
-    LOG(INFO) << "-------------------------------------------------------------"
-                 "-------------------";
-    LOG(INFO) << "| Compilation statistics for plugin \"" << path << "\" method " << method << ":";
-    LOG(INFO) << "| Generated code size (MB) : "
-              << stats_args.generated_code_size_in_bytes / (1024.0 * 1024.0);
-    LOG(INFO) << "| Argument size       (MB) : "
-              << stats_args.argument_size_in_bytes / (1024.0 * 1024.0);
-    LOG(INFO) << "| Output size         (MB) : "
-              << stats_args.output_size_in_bytes / (1024.0 * 1024.0);
-    LOG(INFO) << "| Alias size          (MB) : "
-              << stats_args.alias_size_in_bytes / (1024.0 * 1024.0);
-    LOG(INFO) << "| Temp size           (MB): "
-              << stats_args.temp_size_in_bytes / (1024.0 * 1024.0);
-    LOG(INFO) << "| Host generated code size (MB): "
-              << stats_args.host_generated_code_size_in_bytes / (1024.0 * 1024.0);
-    LOG(INFO) << "| Host argument size       (MB): "
-              << stats_args.host_argument_size_in_bytes / (1024.0 * 1024.0);
-    LOG(INFO) << "| Host output size         (MB): "
-              << stats_args.host_output_size_in_bytes / (1024.0 * 1024.0);
-    LOG(INFO) << "| Host alias size          (MB): "
-              << stats_args.host_alias_size_in_bytes / (1024.0 * 1024.0);
-    LOG(INFO) << "| Host temp size           (MB): "
-              << stats_args.host_temp_size_in_bytes / (1024.0 * 1024.0);
-    LOG(INFO) << "-------------------------------------------------------------"
-                 "-------------------";
-  }
-
-  absl::StatusOr<size_t> SizeOfGeneratedCodeInBytes() const {
-    PJRT_Executable_SizeOfGeneratedCodeInBytes_Args size_args;
-    size_args.struct_size = PJRT_Executable_SizeOfGeneratedCodeInBytes_Args_STRUCT_SIZE;
-    size_args.extension_start = nullptr;
-    size_args.executable = executable;
-    RETURN_IF_PJRT_ERROR(api->PJRT_Executable_SizeOfGeneratedCodeInBytes(&size_args), api);
-    return size_args.size_in_bytes;
-  }
-
-  absl::StatusOr<int> NumOutputs() const {
-    PJRT_Executable_NumOutputs_Args num_outputs_args;
-    num_outputs_args.struct_size = PJRT_Executable_NumOutputs_Args_STRUCT_SIZE;
-    num_outputs_args.extension_start = nullptr;
-    num_outputs_args.executable = executable;
-    RETURN_IF_PJRT_ERROR(api->PJRT_Executable_NumOutputs(&num_outputs_args), api);
-    size_t num_outputs = num_outputs_args.num_outputs;
-    return num_outputs;
-  }
-
-  absl::StatusOr<std::vector<PJRT_Buffer_Type>> OutputElementTypes() const {
-    PJRT_Executable_OutputElementTypes_Args types_args;
-    types_args.struct_size = PJRT_Executable_OutputElementTypes_Args_STRUCT_SIZE;
-    types_args.extension_start = nullptr;
-    types_args.executable = executable;
-    RETURN_IF_PJRT_ERROR(api->PJRT_Executable_OutputElementTypes(&types_args), api);
-    return std::vector<PJRT_Buffer_Type>(types_args.output_types,
-                                         types_args.output_types + types_args.num_output_types);
-  }
-
-  absl::StatusOr<std::vector<std::vector<int64_t>>> OutputDimensions() const {
-    PJRT_Executable_OutputDimensions_Args dims_args;
-    dims_args.struct_size = PJRT_Executable_OutputDimensions_Args_STRUCT_SIZE;
-    dims_args.extension_start = nullptr;
-    dims_args.executable = executable;
-    RETURN_IF_PJRT_ERROR(api->PJRT_Executable_OutputDimensions(&dims_args), api);
-    std::vector<std::vector<int64_t>> dims;
-    size_t offset = 0;
-    for (size_t i = 0; i < dims_args.num_outputs; ++i) {
-      dims.push_back(std::vector<int64_t>(dims_args.dims + offset,
-                                          dims_args.dims + offset + dims_args.dim_sizes[i]));
-      offset += dims_args.dim_sizes[i];
-    }
-    return dims;
-  }
-};
-
 class PJRTBuffer {
  protected:
   PJRT_Buffer* buffer_;
@@ -345,7 +193,7 @@ class PJRTBuffer {
   // Optional: host-owned buffer data. Only used for zero-copy buffer semantics.
   Buffer buffer_data_;
   // Only used for zero copy: signals that the buffer can be freed now.
-  PJRT_Event* done_with_host_buffer_;
+  PJRT_Event* done_with_host_buffer_ = nullptr;
 
   // Zero-copy variant. The buffer data will be owned by this object.
   PJRTBuffer(PJRT_Buffer* buffer, const PJRT_Api* api, Buffer&& buffer_data,
@@ -437,7 +285,55 @@ class PJRTBuffer {
       case PJRT_Buffer_Type_F4E2M1FN:
       case PJRT_Buffer_Type_TOKEN:
       default:
-        return absl::InvalidArgumentError(absl::StrCat("Unsupported buffer type: ", type));
+        return absl::InvalidArgumentError(
+            absl::StrCat("TypeToElementSize: unsupported buffer type: ", type));
+    }
+  }
+
+  static absl::StatusOr<std::string> TypeToMLIR(PJRT_Buffer_Type type) {
+    switch (type) {
+      case PJRT_Buffer_Type_S8:
+        return "s8";
+
+      case PJRT_Buffer_Type_U8:
+        return "u8";
+
+      case PJRT_Buffer_Type_S16:
+        return "s16";
+
+      case PJRT_Buffer_Type_U16:
+        return "u16";
+
+      case PJRT_Buffer_Type_F16:
+        return "f16";
+
+      case PJRT_Buffer_Type_S32:
+        return "s32";
+
+      case PJRT_Buffer_Type_U32:
+        return "u32";
+
+      case PJRT_Buffer_Type_F32:
+        return "f32";
+
+      case PJRT_Buffer_Type_S64:
+        return "s64";
+
+      case PJRT_Buffer_Type_U64:
+        return "u64";
+
+      case PJRT_Buffer_Type_F64:
+        return "f64";
+
+      case PJRT_Buffer_Type_C64:
+        return "complex<f32>";
+
+      case PJRT_Buffer_Type_C128:
+        return "complex<f64>";
+
+      default:
+        return absl::InvalidArgumentError(
+            absl::StrCat("TypeToMLIR: unsupported buffer type: ", type));
     }
   }
 
@@ -511,15 +407,262 @@ class PJRTBuffer {
     RETURN_IF_PJRT_ERROR(ctx->api->PJRT_Client_BufferFromHostBuffer(&args), ctx->api);
     return PJRTBuffer(args.buffer, ctx->api, std::move(buffer), args.done_with_host_buffer);
   }
+
+  /**
+   * Calculates buffer size in bytes.
+   */
+  absl::StatusOr<size_t> Size() {
+    PJRT_Buffer_Dimensions_Args out_dim_args;
+    out_dim_args.struct_size = PJRT_Buffer_Dimensions_Args_STRUCT_SIZE;
+    out_dim_args.extension_start = nullptr;
+    out_dim_args.buffer = buffer_;
+    RETURN_IF_PJRT_ERROR(api_->PJRT_Buffer_Dimensions(&out_dim_args), api_);
+
+    PJRT_Buffer_ElementType_Args out_type_args;
+    out_type_args.struct_size = PJRT_Buffer_ElementType_Args_STRUCT_SIZE;
+    out_type_args.extension_start = nullptr;
+    out_type_args.buffer = buffer_;
+    RETURN_IF_PJRT_ERROR(api_->PJRT_Buffer_ElementType(&out_type_args), api_)
+
+    auto element_size = TypeToElementSize(out_type_args.type);
+    RETURN_IF_ERROR(element_size.status());
+
+    size_t size = element_size.value();
+    for (size_t i = 0; i < out_dim_args.num_dims; ++i) {
+      size *= out_dim_args.dims[i];
+    }
+    return size;
+  }
+
+  absl::Status ToHostBuffer(Buffer* out_buffer) {
+    PJRT_Buffer_ToHostBuffer_Args bth_args;
+    bth_args.struct_size = PJRT_Buffer_ToHostBuffer_Args_STRUCT_SIZE;
+    bth_args.extension_start = nullptr;
+    bth_args.src = buffer_;
+    bth_args.dst = out_buffer->data();
+    bth_args.dst_size = out_buffer->size();
+    bth_args.host_layout = nullptr;  // Use default/current layout
+    // Output field:
+    bth_args.event = nullptr;
+
+    RETURN_IF_PJRT_ERROR(api_->PJRT_Buffer_ToHostBuffer(&bth_args), api_);
+    RETURN_IF_ERROR(PJRTAwaitAndDestroyEvent(bth_args.event, api_));
+    return absl::OkStatus();
+  }
+};
+
+class PJRTExecutable {
+ public:
+  // Not owned.
+  const PJRT_Api* api = nullptr;
+  // Owned and destroyed by this object.
+  PJRT_LoadedExecutable* loaded_executable = nullptr;
+  PJRT_Executable* executable = nullptr;
+
+ protected:
+  PJRTExecutable() = default;
+
+ public:
+  ~PJRTExecutable() {
+    if (executable != nullptr) {
+      PJRT_Executable_Destroy_Args destroy_exec_args;
+      destroy_exec_args.struct_size = PJRT_Executable_Destroy_Args_STRUCT_SIZE;
+      destroy_exec_args.extension_start = nullptr;
+      destroy_exec_args.executable = executable;
+      LogAndDestroyError(api->PJRT_Executable_Destroy(&destroy_exec_args), api);
+    }
+    if (loaded_executable != nullptr) {
+      PJRT_LoadedExecutable_Destroy_Args destroy_exec_args;
+      destroy_exec_args.struct_size = PJRT_LoadedExecutable_Destroy_Args_STRUCT_SIZE;
+      destroy_exec_args.extension_start = nullptr;
+      destroy_exec_args.executable = loaded_executable;
+      LogAndDestroyError(api->PJRT_LoadedExecutable_Destroy(&destroy_exec_args), api);
+    }
+  }
+
+  static absl::StatusOr<std::unique_ptr<PJRTExecutable>> Load(const std::string& mlir_code,
+                                                              PJRTContext* ctx) {
+    std::unique_ptr<PJRTExecutable> exec(new PJRTExecutable());
+    exec->api = ctx->api;
+
+    // Compile the MLIR program
+    PJRT_Program program_desc;
+    program_desc.struct_size = PJRT_Program_STRUCT_SIZE;
+    program_desc.extension_start = nullptr;
+    program_desc.code = const_cast<char*>(mlir_code.c_str());
+    program_desc.code_size = mlir_code.length();
+    const char* format_str = "mlir";
+    program_desc.format = format_str;
+    program_desc.format_size = strlen(format_str);
+
+    PJRT_Client_Compile_Args compile_args;
+    compile_args.struct_size = PJRT_Client_Compile_Args_STRUCT_SIZE;
+    compile_args.extension_start = nullptr;
+    compile_args.client = ctx->client;
+    compile_args.program = &program_desc;
+    // Compile options
+    xla::CompileOptionsProto compile_options;
+    xla::ExecutableBuildOptionsProto* build_options =
+        compile_options.mutable_executable_build_options();
+    build_options->set_num_replicas(1);
+    build_options->set_num_partitions(1);
+    build_options->set_optimization_level(xla::ExecutionOptions_EffortLevel_EFFORT_O2);
+    build_options->set_memory_fitting_level(xla::ExecutionOptions_EffortLevel_EFFORT_O2);
+    compile_options.set_compile_portable_executable(false);
+    std::string compile_options_str = compile_options.SerializeAsString();
+    compile_args.compile_options = compile_options_str.c_str();
+    compile_args.compile_options_size = compile_options_str.length();
+    // Output field:
+    compile_args.executable = nullptr;
+
+    RETURN_IF_PJRT_ERROR(ctx->api->PJRT_Client_Compile(&compile_args), ctx->api);
+    exec->loaded_executable = compile_args.executable;
+    std::cout << "MLIR program compiled." << std::endl;
+
+    // Get the executable
+    PJRT_LoadedExecutable_GetExecutable_Args get_exec_args;
+    get_exec_args.struct_size = PJRT_LoadedExecutable_GetExecutable_Args_STRUCT_SIZE;
+    get_exec_args.extension_start = nullptr;
+    get_exec_args.loaded_executable = exec->loaded_executable;
+    RETURN_IF_PJRT_ERROR(ctx->api->PJRT_LoadedExecutable_GetExecutable(&get_exec_args), ctx->api);
+    exec->executable = get_exec_args.executable;
+
+    return exec;
+  }
+
+  absl::StatusOr<std::vector<PJRTBuffer>> Execute(std::vector<PJRTBuffer>&& input_buffers) {
+    std::vector<PJRT_Buffer*> input_buffer_ptrs;
+    input_buffer_ptrs.reserve(input_buffers.size());
+    for (auto& buffer : input_buffers) {
+      input_buffer_ptrs.push_back(buffer.GetBuffer());
+    }
+    PJRT_Buffer* const* input_buffer_array_ptr = input_buffer_ptrs.data();
+    PJRT_Buffer* const* const* all_devices_arg_lists = &input_buffer_array_ptr;
+
+    // Allocate array for the outputs.
+    auto status_or_num_outputs = NumOutputs();
+    RETURN_IF_ERROR(status_or_num_outputs.status());
+    std::vector<PJRT_Buffer*> device_output_buffers_list(status_or_num_outputs.value());
+    PJRT_Buffer** device_output_buffers_array_ptr = device_output_buffers_list.data();
+    PJRT_Buffer** const* output_lists_for_execute_arg = &device_output_buffers_array_ptr;
+
+    // Output field for completion event:
+    PJRT_Event* execution_complete_event = nullptr;
+
+    PJRT_ExecuteOptions execute_options;
+    execute_options.struct_size = PJRT_ExecuteOptions_STRUCT_SIZE;
+    execute_options.extension_start = nullptr;
+    execute_options.launch_id = 0;  // Default
+    execute_options.non_donatable_input_indices = nullptr;
+    execute_options.num_non_donatable_input_indices = 0;
+    execute_options.context = nullptr;
+    execute_options.send_callbacks = nullptr;
+    execute_options.recv_callbacks = nullptr;
+    execute_options.num_send_ops = 0;
+    execute_options.num_recv_ops = 0;
+
+    PJRT_LoadedExecutable_Execute_Args execute_args;
+    execute_args.struct_size = PJRT_LoadedExecutable_Execute_Args_STRUCT_SIZE;
+    execute_args.extension_start = nullptr;
+    execute_args.executable = loaded_executable;
+    execute_args.options = &execute_options;
+    execute_args.argument_lists = all_devices_arg_lists;
+    execute_args.num_devices = 1;
+    execute_args.num_args = input_buffers.size();
+    execute_args.execute_device = nullptr;
+    execute_args.output_lists = output_lists_for_execute_arg;
+    execute_args.device_complete_events = &execution_complete_event;
+
+    DLOG(INFO) << "Calling PJRT_LoadedExecutable_Execute";
+    RETURN_IF_PJRT_ERROR(api->PJRT_LoadedExecutable_Execute(&execute_args), api);
+    RETURN_IF_ERROR(PJRTAwaitAndDestroyEvent(execution_complete_event, api));
+
+    std::vector<PJRTBuffer> output_buffers;
+    output_buffers.reserve(device_output_buffers_list.size());
+    for (auto& buffer : device_output_buffers_list) {
+      output_buffers.emplace_back(buffer, api);
+    }
+    return output_buffers;
+  }
+
+  void PrintStats(absl::string_view path, absl::string_view method) const {
+    if (executable == nullptr) return;
+
+    PJRT_Executable_GetCompiledMemoryStats_Args stats_args;
+    stats_args.struct_size = PJRT_Executable_GetCompiledMemoryStats_Args_STRUCT_SIZE;
+    stats_args.extension_start = nullptr;
+    stats_args.executable = executable;
+    LogAndDestroyError(api->PJRT_Executable_GetCompiledMemoryStats(&stats_args), api);
+
+    LOG(INFO) << "-------------------------------------------------------------"
+                 "-------------------";
+    LOG(INFO) << "| Compilation statistics for:";
+    LOG(INFO) << "|   plugin: " << path;
+    LOG(INFO) << "|   method: " << method;
+    LOG(INFO) << "| Generated code size (bytes) : " << stats_args.generated_code_size_in_bytes;
+    LOG(INFO) << "| Argument size       (bytes) : " << stats_args.argument_size_in_bytes;
+    LOG(INFO) << "| Output size         (bytes) : " << stats_args.output_size_in_bytes;
+    LOG(INFO) << "| Alias size          (bytes) : " << stats_args.alias_size_in_bytes;
+    LOG(INFO) << "| Temp size           (bytes): " << stats_args.temp_size_in_bytes;
+    LOG(INFO) << "| Host generated code size (bytes): "
+              << stats_args.host_generated_code_size_in_bytes;
+    LOG(INFO) << "| Host argument size       (bytes): " << stats_args.host_argument_size_in_bytes;
+    LOG(INFO) << "| Host output size         (bytes): " << stats_args.host_output_size_in_bytes;
+    LOG(INFO) << "| Host alias size          (bytes): " << stats_args.host_alias_size_in_bytes;
+    LOG(INFO) << "| Host temp size           (bytes): " << stats_args.host_temp_size_in_bytes;
+    LOG(INFO) << "-------------------------------------------------------------"
+                 "-------------------";
+  }
+
+  absl::StatusOr<size_t> SizeOfGeneratedCodeInBytes() const {
+    PJRT_Executable_SizeOfGeneratedCodeInBytes_Args size_args;
+    size_args.struct_size = PJRT_Executable_SizeOfGeneratedCodeInBytes_Args_STRUCT_SIZE;
+    size_args.extension_start = nullptr;
+    size_args.executable = executable;
+    RETURN_IF_PJRT_ERROR(api->PJRT_Executable_SizeOfGeneratedCodeInBytes(&size_args), api);
+    return size_args.size_in_bytes;
+  }
+
+  absl::StatusOr<int> NumOutputs() const {
+    PJRT_Executable_NumOutputs_Args num_outputs_args;
+    num_outputs_args.struct_size = PJRT_Executable_NumOutputs_Args_STRUCT_SIZE;
+    num_outputs_args.extension_start = nullptr;
+    num_outputs_args.executable = executable;
+    RETURN_IF_PJRT_ERROR(api->PJRT_Executable_NumOutputs(&num_outputs_args), api);
+    size_t num_outputs = num_outputs_args.num_outputs;
+    return num_outputs;
+  }
+
+  absl::StatusOr<std::vector<PJRT_Buffer_Type>> OutputElementTypes() const {
+    PJRT_Executable_OutputElementTypes_Args types_args;
+    types_args.struct_size = PJRT_Executable_OutputElementTypes_Args_STRUCT_SIZE;
+    types_args.extension_start = nullptr;
+    types_args.executable = executable;
+    RETURN_IF_PJRT_ERROR(api->PJRT_Executable_OutputElementTypes(&types_args), api);
+    return std::vector<PJRT_Buffer_Type>(types_args.output_types,
+                                         types_args.output_types + types_args.num_output_types);
+  }
+
+  absl::StatusOr<std::vector<std::vector<int64_t>>> OutputDimensions() const {
+    PJRT_Executable_OutputDimensions_Args dims_args;
+    dims_args.struct_size = PJRT_Executable_OutputDimensions_Args_STRUCT_SIZE;
+    dims_args.extension_start = nullptr;
+    dims_args.executable = executable;
+    RETURN_IF_PJRT_ERROR(api->PJRT_Executable_OutputDimensions(&dims_args), api);
+    std::vector<std::vector<int64_t>> dims;
+    size_t offset = 0;
+    for (size_t i = 0; i < dims_args.num_outputs; ++i) {
+      dims.push_back(std::vector<int64_t>(dims_args.dims + offset,
+                                          dims_args.dims + offset + dims_args.dim_sizes[i]));
+      offset += dims_args.dim_sizes[i];
+    }
+    return dims;
+  }
 };
 
 PJRTCompiledPlugin::~PJRTCompiledPlugin() {}
 
-absl::Status PJRTCompiledPlugin::Init(std::vector<Buffer>&& inputs) {
-  if (initialized_) {
-    return absl::FailedPreconditionError(
-        "PJRTCompiledPlugin::Init() called on a alrady initialized plugin.");
-  }
+absl::StatusOr<PluginState> PJRTCompiledPlugin::Init(std::vector<Buffer> inputs) const {
   if (inputs.size() != input_buffer_names_.size()) {
     return absl::InvalidArgumentError(
         "PJRTCompiledPlugin::Init() inputs size doesn't match expected buffer number.");
@@ -543,52 +686,95 @@ absl::Status PJRTCompiledPlugin::Init(std::vector<Buffer>&& inputs) {
     input_buffers.push_back(std::move(status_or_buffer.value()));
   }
 
-  // TODO: move to PJRTExecutable
-  std::vector<PJRT_Buffer*> input_buffer_ptrs;
-  input_buffer_ptrs.reserve(input_buffers.size());
-  for (auto& buffer : input_buffers) {
-    input_buffer_ptrs.push_back(buffer.GetBuffer());
+  auto status_or_output_buffers = init_fn_->Execute(std::move(input_buffers));
+  RETURN_IF_ERROR(status_or_output_buffers.status());
+  auto& output_buffers = status_or_output_buffers.value();
+  if (output_buffers.size() != state_size_) {
+    return absl::InternalError(
+        absl::StrCat("PJRTCompuiledPlugin::Init() output size does not match state_size_."));
   }
-  PJRT_Buffer* const* input_buffer_array_ptr = input_buffer_ptrs.data();
-  PJRT_Buffer* const* const* all_devices_arg_lists = &input_buffer_array_ptr;
 
-  // Allocate array for the outputs.
-  std::vector<PJRT_Buffer*> device_output_buffers_list(state_size_);
-  PJRT_Buffer** device_output_buffers_array_ptr = device_output_buffers_list.data();
-  PJRT_Buffer** const* output_lists_for_execute_arg = &device_output_buffers_array_ptr;
+  std::vector<Buffer> state(state_size_);
+  for (size_t i = 0; i < state.size(); ++i) {
+    auto status_or_buffer_size = output_buffers[i].Size();
+    RETURN_IF_ERROR(status_or_buffer_size.status());
+    LOG(INFO) << "PJRTCompiledPlugin::Init() creating state buffer of size: "
+              << status_or_buffer_size.value();
+    state[i].resize(status_or_buffer_size.value());
+    RETURN_IF_ERROR(output_buffers[i].ToHostBuffer(&state[i]));
+  }
+  LOG(INFO) << "Plugin state initialized: " << state.size() << " elements.";
+  return state;
+}
 
-  // Output field for completion event:
-  PJRT_Event* execution_complete_event = nullptr;
+absl::Status PJRTCompiledPlugin::Update(std::vector<Buffer>&& inputs, PluginState* state,
+                                        std::vector<Buffer>* outputs) const {
+  if (inputs.size() != input_buffer_names_.size()) {
+    return absl::InvalidArgumentError(
+        "PJRTCompiledPlugin::Update() inputs size doesn't match expected buffer number.");
+  }
+  if (outputs->size() != output_buffer_names_.size()) {
+    return absl::InvalidArgumentError(
+        "PJRTCompiledPlugin::Update() outputs size doesn't match expected buffer number.");
+  }
 
-  PJRT_ExecuteOptions execute_options;
-  execute_options.struct_size = PJRT_ExecuteOptions_STRUCT_SIZE;
-  execute_options.extension_start = nullptr;
-  execute_options.launch_id = 0;  // Default
-  execute_options.non_donatable_input_indices = nullptr;
-  execute_options.num_non_donatable_input_indices = 0;
-  execute_options.context = nullptr;
-  execute_options.send_callbacks = nullptr;
-  execute_options.recv_callbacks = nullptr;
-  execute_options.num_send_ops = 0;
-  execute_options.num_recv_ops = 0;
+  DLOG(INFO) << "Update() preparing buffers";
+  std::vector<PJRTBuffer> input_buffers;
+  input_buffers.reserve(inputs.size() + state_size_ + 1);
+  // First argument: the platform.
+  Buffer platform_buffer(sizeof(int32_t));
+  reinterpret_cast<int32_t*>(platform_buffer.data())[0] = 0;
+  auto status_or_platform_buffer =
+      PJRTBuffer::FromHostCopy(platform_buffer, PJRT_Buffer_Type_S32, {1}, ctx_);
+  RETURN_IF_ERROR(status_or_platform_buffer.status());
+  input_buffers.push_back(std::move(status_or_platform_buffer.value()));
+  // State. This is copied as we will use the buffers to store the new state.
+  for (size_t i = 0; i < state->size(); ++i) {
+    auto status_or_buffer = PJRTBuffer::FromHostCopy(state->at(i), /*type=*/state_types_[i],
+                                                     /*dims=*/state_dimensions_[i], ctx_);
+    RETURN_IF_ERROR(status_or_buffer.status());
+    input_buffers.push_back(std::move(status_or_buffer.value()));
+  }
+  // Audio input buffer arguments.
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    auto status_or_buffer =
+        PJRTBuffer::FromHostZeroCopy(std::move(inputs[i]), /*type=*/audio_buffer_type_,
+                                     /*dims=*/{audio_buffer_size_}, ctx_);
+    RETURN_IF_ERROR(status_or_buffer.status());
+    input_buffers.push_back(std::move(status_or_buffer.value()));
+  }
 
-  PJRT_LoadedExecutable_Execute_Args execute_args;
-  execute_args.struct_size = PJRT_LoadedExecutable_Execute_Args_STRUCT_SIZE;
-  execute_args.extension_start = nullptr;
-  execute_args.executable = init_fn_->loaded_executable;
-  execute_args.options = &execute_options;
-  execute_args.argument_lists = all_devices_arg_lists;
-  execute_args.num_devices = 1;
-  execute_args.num_args = 1 + inputs.size();
-  execute_args.execute_device = nullptr;
-  execute_args.output_lists = output_lists_for_execute_arg;
-  execute_args.device_complete_events = &execution_complete_event;
+  DLOG(INFO) << "Update() buffers done. Calling Execute.";
+  auto status_or_output_buffers = update_fn_->Execute(std::move(input_buffers));
+  RETURN_IF_ERROR(status_or_output_buffers.status());
+  auto& output_buffers = status_or_output_buffers.value();
+  if (output_buffers.size() != output_buffer_names_.size() + state_size_) {
+    return absl::InternalError(absl::StrCat(
+        "PJRTCompuiledPlugin::Update() output size does not match output buffers + state_size_."));
+  }
+  DLOG(INFO) << "Execute finished.";
 
-  RETURN_IF_PJRT_ERROR(ctx_->api->PJRT_LoadedExecutable_Execute(&execute_args), ctx_->api);
-  RETURN_IF_ERROR(PJRTAwaitAndDestroyEvent(execution_complete_event, ctx_->api));
-
-  // TODO: transfer the buffers back.
-
+  // Get the states.
+  for (size_t i = 0; i < state->size(); ++i) {
+    auto status_or_buffer_size = output_buffers[i].Size();
+    RETURN_IF_ERROR(status_or_buffer_size.status());
+    if (state->at(i).size() != status_or_buffer_size.value()) {
+      return absl::InternalError(
+          "PJRTCompuiledPlugin::Update() returned state buffer with size not matching expected "
+          "size.");
+    }
+    RETURN_IF_ERROR(output_buffers[i].ToHostBuffer(&state->at(i)));
+  }
+  DLOG(INFO) << "Copied state buffers.";
+  // Get the output buffers.
+  for (size_t i = 0; i < outputs->size(); ++i) {
+    size_t buffer_index = i + state_size_;
+    auto status_or_buffer_size = output_buffers[buffer_index].Size();
+    RETURN_IF_ERROR(status_or_buffer_size.status());
+    outputs->at(i).resize(status_or_buffer_size.value());
+    RETURN_IF_ERROR(output_buffers[buffer_index].ToHostBuffer(&outputs->at(i)));
+  }
+  DLOG(INFO) << "Copied outputs.";
   return absl::OkStatus();
 }
 
@@ -646,10 +832,6 @@ absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(
   compiled_plugin->init_fn_ = std::move(status_or_init_excutable.value());
   compiled_plugin->init_fn_->PrintStats(path_, "init");
 
-  auto status_or_code_size = compiled_plugin->init_fn_->SizeOfGeneratedCodeInBytes();
-  RETURN_IF_ERROR(status_or_code_size.status());
-  LOG(INFO) << "Plugin init code size: " << status_or_code_size.value();
-
   // TODO: verify plugin inputs.
 
   auto status_or_num_outputs = compiled_plugin->init_fn_->NumOutputs();
@@ -676,6 +858,28 @@ absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(
   compiled_plugin->state_types_ = element_types;
   compiled_plugin->state_dimensions_ = dimensions;
 
+  transforms.clear();
+  transforms.push_back(RefineType(MlirTensorType({}, "i32")));  // platform index
+  for (size_t i = 0; i < num_outputs; ++i) {
+    auto status_or_mlir_type = PJRTBuffer::TypeToMLIR(element_types[i]);
+    RETURN_IF_ERROR(status_or_mlir_type.status());
+    transforms.push_back(RefineType(MlirTensorType(dimensions[i], status_or_mlir_type.value())));
+  }
+  for (const std::string& _ : input_buffers) {
+    transforms.push_back(RefineType(MlirTensorType({buffer_size}, "f32")));
+  }
+  transforms.push_back(ReplaceWithConstant(sample_rate));  // sample rate
+
+  auto status_or_update_mlir = MlirPipeline(update_fn_mlir_, transforms, global_to_value);
+  RETURN_IF_ERROR(status_or_init_mlir.status());
+  std::string update_mlir = status_or_update_mlir.value();
+  LOG(INFO) << "Compiling plugin update method MLIR:\n" << update_mlir;
+
+  auto status_or_update_excutable = PJRTExecutable::Load(update_mlir, ctx_.get());
+  RETURN_IF_ERROR(status_or_update_excutable.status());
+  compiled_plugin->update_fn_ = std::move(status_or_update_excutable.value());
+  compiled_plugin->update_fn_->PrintStats(path_, "update");
+
   return compiled_plugin;
 }
 
@@ -695,19 +899,6 @@ int main() {
     PJRT_Device* device = nullptr;
 
     try {
-        // 8. Execute the model
-        CheckError(api->PJRT_LoadedExecutable_Execute(&execute_args), api,
-"PJRT_LoadedExecutable_Execute"); std::cout << "Execution launched." <<
-std::endl;
-
-        AwaitAndDestroyEvent(execution_complete_event, api, "model execution");
-        std::cout << "Execution completed." << std::endl;
-
-        output_buffer_from_execute = device_output_buffers_list[0]; // Retrieve
-the populated output buffer if (!output_buffer_from_execute) { throw
-std::runtime_error("Execute did not return an output buffer.");
-        }
-
         // 9. Get output buffer details to prepare host memory
         PJRT_Buffer_Dimensions_Args out_dim_args;
         out_dim_args.struct_size = PJRT_Buffer_Dimensions_Args_STRUCT_SIZE;
@@ -772,51 +963,6 @@ mid-setup
 
     // 12. Cleanup
     std::cout << "Cleaning up resources..." << std::endl;
-    if (input_buffer) {
-        PJRT_Buffer_Destroy_Args destroy_buf_args;
-        destroy_buf_args.struct_size = PJRT_Buffer_Destroy_Args_STRUCT_SIZE;
-        destroy_buf_args.extension_start = nullptr;
-        destroy_buf_args.buffer = input_buffer;
-        CheckError(api->PJRT_Buffer_Destroy(&destroy_buf_args), api,
-"PJRT_Buffer_Destroy (input)"); std::cout << "Input buffer destroyed." <<
-std::endl;
-    }
-    if (output_buffer_from_execute) {
-        PJRT_Buffer_Destroy_Args destroy_buf_args;
-        destroy_buf_args.struct_size = PJRT_Buffer_Destroy_Args_STRUCT_SIZE;
-        destroy_buf_args.extension_start = nullptr;
-        destroy_buf_args.buffer = output_buffer_from_execute;
-        CheckError(api->PJRT_Buffer_Destroy(&destroy_buf_args), api,
-"PJRT_Buffer_Destroy (output)"); std::cout << "Output buffer destroyed." <<
-std::endl;
-    }
-    if (underlying_executable) {
-        PJRT_Executable_Destroy_Args destroy_exec_args;
-        destroy_exec_args.struct_size =
-PJRT_Executable_Destroy_Args_STRUCT_SIZE; destroy_exec_args.extension_start =
-nullptr; destroy_exec_args.executable = underlying_executable;
-        CheckError(api->PJRT_Executable_Destroy(&destroy_exec_args), api,
-"PJRT_Executable_Destroy (underlying)"); std::cout << "Underlying
-PJRT_Executable object destroyed." << std::endl;
-    }
-    if (loaded_executable) {
-        PJRT_LoadedExecutable_Destroy_Args destroy_loaded_exec_args;
-        destroy_loaded_exec_args.struct_size =
-PJRT_LoadedExecutable_Destroy_Args_STRUCT_SIZE;
-        destroy_loaded_exec_args.extension_start = nullptr;
-        destroy_loaded_exec_args.executable = loaded_executable;
-        CheckError(api->PJRT_LoadedExecutable_Destroy(&destroy_loaded_exec_args),
-api, "PJRT_LoadedExecutable_Destroy"); std::cout << "Loaded executable
-destroyed." << std::endl;
-    }
-    if (client) {
-        PJRT_Client_Destroy_Args destroy_client_args;
-        destroy_client_args.struct_size = PJRT_Client_Destroy_Args_STRUCT_SIZE;
-        destroy_client_args.extension_start = nullptr;
-        destroy_client_args.client = client;
-        CheckError(api->PJRT_Client_Destroy(&destroy_client_args), api,
-"PJRT_Client_Destroy"); std::cout << "Client destroyed." << std::endl;
-    }
 
     std::cout << "Execution finished successfully." << std::endl;
     return 0;

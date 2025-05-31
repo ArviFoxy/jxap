@@ -141,6 +141,12 @@
     "regex": "cpp",
     "expected": "cpp",
     "list": "cpp",
-    "sim_stl_pair": "cpp"
+    "sim_stl_pair": "cpp",
+    "hash_map": "cpp",
+    "hash_set": "cpp",
+    "ranges": "cpp",
+    "valarray": "cpp",
+    "unordered_set": "cpp",
+    "alignedvector3": "cpp"
   },
 }

@@ -73,6 +73,24 @@ void LogAndDestroyError(PJRT_Error* error, const PJRT_Api* api) {
     }                                   \
   }
 
+absl::Status PJRTAwaitAndDestroyEvent(PJRT_Event* event, const PJRT_Api* api) {
+  if (event == nullptr) return absl::OkStatus();
+
+  PJRT_Event_Await_Args await_args;
+  await_args.struct_size = PJRT_Event_Await_Args_STRUCT_SIZE;
+  await_args.extension_start = nullptr;
+  await_args.event = event;
+  RETURN_IF_PJRT_ERROR(api->PJRT_Event_Await(&await_args), api);
+
+  PJRT_Event_Destroy_Args destroy_event_args;
+  destroy_event_args.struct_size = PJRT_Event_Destroy_Args_STRUCT_SIZE;
+  destroy_event_args.extension_start = nullptr;
+  destroy_event_args.event = event;
+  RETURN_IF_PJRT_ERROR(api->PJRT_Event_Destroy(&destroy_event_args), api);
+
+  return absl::OkStatus();
+}
+
 }  // namespace
 
 class PJRTContext {
@@ -320,7 +338,259 @@ class PJRTExecutable {
   }
 };
 
+class PJRTBuffer {
+ protected:
+  PJRT_Buffer* buffer_;
+  const PJRT_Api* api_;
+  // Optional: host-owned buffer data. Only used for zero-copy buffer semantics.
+  Buffer buffer_data_;
+  // Only used for zero copy: signals that the buffer can be freed now.
+  PJRT_Event* done_with_host_buffer_;
+
+  // Zero-copy variant. The buffer data will be owned by this object.
+  PJRTBuffer(PJRT_Buffer* buffer, const PJRT_Api* api, Buffer&& buffer_data,
+             PJRT_Event* done_with_host_buffer)
+      : buffer_(buffer),
+        api_(api),
+        buffer_data_(std::move(buffer_data)),
+        done_with_host_buffer_(done_with_host_buffer) {}
+
+ public:
+  // Copying variant, PJRT_Buffer owns the buffer data.
+  PJRTBuffer(PJRT_Buffer* buffer, const PJRT_Api* api) : buffer_(buffer), api_(api) {}
+
+  ~PJRTBuffer() {
+    if (buffer_ != nullptr) {
+      PJRT_Buffer_Destroy_Args destroy_args;
+      destroy_args.struct_size = PJRT_Buffer_Destroy_Args_STRUCT_SIZE;
+      destroy_args.extension_start = nullptr;
+      destroy_args.buffer = buffer_;
+      LogAndDestroyError(api_->PJRT_Buffer_Destroy(&destroy_args), api_);
+
+      if (done_with_host_buffer_ != nullptr) {
+        absl::Status status = PJRTAwaitAndDestroyEvent(done_with_host_buffer_, api_);
+        if (!status.ok()) {
+          LOG(ERROR) << "Error when waiting for host buffer to be freed: " << status.message();
+        }
+      }
+    }
+  }
+
+  // Movable but not copyable.
+  PJRTBuffer(PJRTBuffer&& other) noexcept : buffer_(other.buffer_), api_(other.api_) {
+    other.buffer_ = nullptr;
+  }
+  PJRTBuffer& operator=(PJRTBuffer&& other) noexcept {
+    if (this != &other) {
+      std::swap(buffer_, other.buffer_);
+      std::swap(api_, other.api_);
+    }
+    return *this;
+  }
+  PJRTBuffer(const PJRTBuffer&) = delete;
+  PJRTBuffer& operator=(const PJRTBuffer&) = delete;
+
+  // Returns the underlying buffer.
+  PJRT_Buffer* GetBuffer() { return buffer_; }
+
+  static absl::StatusOr<size_t> TypeToElementSize(PJRT_Buffer_Type type) {
+    switch (type) {
+      case PJRT_Buffer_Type_PRED:
+      case PJRT_Buffer_Type_S8:
+      case PJRT_Buffer_Type_U8:
+      // Truncated 8 bit floating-point formats.
+      case PJRT_Buffer_Type_F8E4M3:
+      case PJRT_Buffer_Type_F8E3M4:
+      case PJRT_Buffer_Type_F8E8M0FNU:
+      case PJRT_Buffer_Type_F8E5M2:
+      case PJRT_Buffer_Type_F8E4M3FN:
+      case PJRT_Buffer_Type_F8E4M3B11FNUZ:
+      case PJRT_Buffer_Type_F8E5M2FNUZ:
+      case PJRT_Buffer_Type_F8E4M3FNUZ:
+        return 1;
+
+      case PJRT_Buffer_Type_S16:
+      case PJRT_Buffer_Type_U16:
+      case PJRT_Buffer_Type_F16:
+      case PJRT_Buffer_Type_BF16:
+        return 2;
+
+      case PJRT_Buffer_Type_S32:
+      case PJRT_Buffer_Type_U32:
+      case PJRT_Buffer_Type_F32:
+        return 4;
+
+      case PJRT_Buffer_Type_S64:
+      case PJRT_Buffer_Type_U64:
+      case PJRT_Buffer_Type_F64:
+      case PJRT_Buffer_Type_C64:
+        return 8;
+
+      case PJRT_Buffer_Type_C128:
+        return 16;
+
+        // Formats with less than 8 bit or unknown size.
+      case PJRT_Buffer_Type_S4:
+      case PJRT_Buffer_Type_U4:
+      case PJRT_Buffer_Type_S2:
+      case PJRT_Buffer_Type_U2:
+      case PJRT_Buffer_Type_F4E2M1FN:
+      case PJRT_Buffer_Type_TOKEN:
+      default:
+        return absl::InvalidArgumentError(absl::StrCat("Unsupported buffer type: ", type));
+    }
+  }
+
+  static absl::Status VerifyBufferSize(BufferRef buffer, PJRT_Buffer_Type type,
+                                       const std::vector<int64_t>& dims) {
+    auto status_or_element_size = TypeToElementSize(type);
+    RETURN_IF_ERROR(status_or_element_size.status());
+    size_t element_size = status_or_element_size.value();
+    size_t expected_size = element_size;
+    for (int64_t dim : dims) {
+      expected_size *= dim;
+    }
+    if (buffer.size() != expected_size) {
+      return absl::InvalidArgumentError(absl::StrCat("Buffer size mismatch: expected ",
+                                                     expected_size, ", got ", buffer.size(), "."));
+    }
+    return absl::OkStatus();
+  }
+
+  static absl::StatusOr<PJRTBuffer> FromHostCopy(BufferRef buffer, PJRT_Buffer_Type type,
+                                                 const std::vector<int64_t>& dims,
+                                                 PJRTContext* ctx) {
+    RETURN_IF_ERROR(VerifyBufferSize(buffer, type, dims));
+
+    PJRT_Client_BufferFromHostBuffer_Args args;
+    args.struct_size = PJRT_Client_BufferFromHostBuffer_Args_STRUCT_SIZE;
+    args.extension_start = nullptr;
+    args.client = ctx->client;
+    args.data = buffer.data();
+    args.type = type;
+    args.dims = dims.data();
+    args.num_dims = dims.size();
+    args.byte_strides = nullptr;  // Null for dense row-major
+    args.num_byte_strides = 0;
+    args.host_buffer_semantics = PJRT_HostBufferSemantics_kImmutableUntilTransferCompletes;
+    args.device = ctx->device;
+    args.memory = nullptr;         // Use default memory for the device
+    args.device_layout = nullptr;  // Use default layout
+    // Output fields:
+    args.done_with_host_buffer = nullptr;
+    args.buffer = nullptr;
+
+    RETURN_IF_PJRT_ERROR(ctx->api->PJRT_Client_BufferFromHostBuffer(&args), ctx->api);
+    RETURN_IF_ERROR(PJRTAwaitAndDestroyEvent(args.done_with_host_buffer, ctx->api));
+    return PJRTBuffer(args.buffer, ctx->api);
+  }
+
+  static absl::StatusOr<PJRTBuffer> FromHostZeroCopy(Buffer&& buffer, PJRT_Buffer_Type type,
+                                                     const std::vector<int64_t>& dims,
+                                                     PJRTContext* ctx) {
+    RETURN_IF_ERROR(VerifyBufferSize(buffer, type, dims));
+
+    PJRT_Client_BufferFromHostBuffer_Args args;
+    args.struct_size = PJRT_Client_BufferFromHostBuffer_Args_STRUCT_SIZE;
+    args.extension_start = nullptr;
+    args.client = ctx->client;
+    args.data = buffer.data();
+    args.type = type;
+    args.dims = dims.data();
+    args.num_dims = dims.size();
+    args.byte_strides = nullptr;  // Null for dense row-major
+    args.num_byte_strides = 0;
+    args.host_buffer_semantics = PJRT_HostBufferSemantics_kMutableZeroCopy;
+    args.device = ctx->device;
+    args.memory = nullptr;         // Use default memory for the device
+    args.device_layout = nullptr;  // Use default layout
+    // Output fields:
+    args.done_with_host_buffer = nullptr;
+    args.buffer = nullptr;
+
+    RETURN_IF_PJRT_ERROR(ctx->api->PJRT_Client_BufferFromHostBuffer(&args), ctx->api);
+    return PJRTBuffer(args.buffer, ctx->api, std::move(buffer), args.done_with_host_buffer);
+  }
+};
+
 PJRTCompiledPlugin::~PJRTCompiledPlugin() {}
+
+absl::Status PJRTCompiledPlugin::Init(std::vector<Buffer>&& inputs) {
+  if (initialized_) {
+    return absl::FailedPreconditionError(
+        "PJRTCompiledPlugin::Init() called on a alrady initialized plugin.");
+  }
+  if (inputs.size() != input_buffer_names_.size()) {
+    return absl::InvalidArgumentError(
+        "PJRTCompiledPlugin::Init() inputs size doesn't match expected buffer number.");
+  }
+
+  std::vector<PJRTBuffer> input_buffers;
+  input_buffers.reserve(inputs.size() + 1);
+  // First argument: the platform.
+  Buffer platform_buffer(sizeof(int32_t));
+  reinterpret_cast<int32_t*>(platform_buffer.data())[0] = 0;
+  auto status_or_platform_buffer =
+      PJRTBuffer::FromHostCopy(platform_buffer, PJRT_Buffer_Type_S32, {1}, ctx_);
+  RETURN_IF_ERROR(status_or_platform_buffer.status());
+  input_buffers.push_back(std::move(status_or_platform_buffer.value()));
+  // Audio input buffer arguments.
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    auto status_or_buffer =
+        PJRTBuffer::FromHostZeroCopy(std::move(inputs[i]), /*type=*/audio_buffer_type_,
+                                     /*dims=*/{audio_buffer_size_}, ctx_);
+    RETURN_IF_ERROR(status_or_buffer.status());
+    input_buffers.push_back(std::move(status_or_buffer.value()));
+  }
+
+  // TODO: move to PJRTExecutable
+  std::vector<PJRT_Buffer*> input_buffer_ptrs;
+  input_buffer_ptrs.reserve(input_buffers.size());
+  for (auto& buffer : input_buffers) {
+    input_buffer_ptrs.push_back(buffer.GetBuffer());
+  }
+  PJRT_Buffer* const* input_buffer_array_ptr = input_buffer_ptrs.data();
+  PJRT_Buffer* const* const* all_devices_arg_lists = &input_buffer_array_ptr;
+
+  // Allocate array for the outputs.
+  std::vector<PJRT_Buffer*> device_output_buffers_list(state_size_);
+  PJRT_Buffer** device_output_buffers_array_ptr = device_output_buffers_list.data();
+  PJRT_Buffer** const* output_lists_for_execute_arg = &device_output_buffers_array_ptr;
+
+  // Output field for completion event:
+  PJRT_Event* execution_complete_event = nullptr;
+
+  PJRT_ExecuteOptions execute_options;
+  execute_options.struct_size = PJRT_ExecuteOptions_STRUCT_SIZE;
+  execute_options.extension_start = nullptr;
+  execute_options.launch_id = 0;  // Default
+  execute_options.non_donatable_input_indices = nullptr;
+  execute_options.num_non_donatable_input_indices = 0;
+  execute_options.context = nullptr;
+  execute_options.send_callbacks = nullptr;
+  execute_options.recv_callbacks = nullptr;
+  execute_options.num_send_ops = 0;
+  execute_options.num_recv_ops = 0;
+
+  PJRT_LoadedExecutable_Execute_Args execute_args;
+  execute_args.struct_size = PJRT_LoadedExecutable_Execute_Args_STRUCT_SIZE;
+  execute_args.extension_start = nullptr;
+  execute_args.executable = init_fn_->loaded_executable;
+  execute_args.options = &execute_options;
+  execute_args.argument_lists = all_devices_arg_lists;
+  execute_args.num_devices = 1;
+  execute_args.num_args = 1 + inputs.size();
+  execute_args.execute_device = nullptr;
+  execute_args.output_lists = output_lists_for_execute_arg;
+  execute_args.device_complete_events = &execution_complete_event;
+
+  RETURN_IF_PJRT_ERROR(ctx_->api->PJRT_LoadedExecutable_Execute(&execute_args), ctx_->api);
+  RETURN_IF_ERROR(PJRTAwaitAndDestroyEvent(execution_complete_event, ctx_->api));
+
+  // TODO: transfer the buffers back.
+
+  return absl::OkStatus();
+}
 
 PJRTPluginRunner::~PJRTPluginRunner() {}
 
@@ -348,9 +618,10 @@ absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(
     const std::set<std::string>& input_buffers, const std::set<std::string>& output_buffers,
     int buffer_size, float sample_rate) {
   std::unique_ptr<PJRTCompiledPlugin> compiled_plugin(new PJRTCompiledPlugin());
-  compiled_plugin->input_buffers_ = input_buffers;
-  compiled_plugin->output_buffers_ = output_buffers;
-  compiled_plugin->buffer_size_ = buffer_size;
+  compiled_plugin->ctx_ = ctx_.get();
+  compiled_plugin->input_buffer_names_ = input_buffers;
+  compiled_plugin->output_buffer_names_ = output_buffers;
+  compiled_plugin->audio_buffer_size_ = buffer_size;
   compiled_plugin->sample_rate_ = sample_rate;
 
   std::vector<ArgumentTransform> transforms;
@@ -362,6 +633,8 @@ absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(
 
   std::map<std::string, ScalarValue> global_to_value;
   global_to_value["BufferSize"] = buffer_size;
+  // TODO: support platforms other than CPU.
+  global_to_value["_platform_index"] = 0;
 
   auto status_or_init_mlir = MlirPipeline(init_fn_mlir_, transforms, global_to_value);
   RETURN_IF_ERROR(status_or_init_mlir.status());
@@ -376,6 +649,8 @@ absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(
   auto status_or_code_size = compiled_plugin->init_fn_->SizeOfGeneratedCodeInBytes();
   RETURN_IF_ERROR(status_or_code_size.status());
   LOG(INFO) << "Plugin init code size: " << status_or_code_size.value();
+
+  // TODO: verify plugin inputs.
 
   auto status_or_num_outputs = compiled_plugin->init_fn_->NumOutputs();
   RETURN_IF_ERROR(status_or_num_outputs.status());
@@ -408,26 +683,6 @@ absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(
 
 /*
 // Helper to await and then destroy an event
-void AwaitAndDestroyEvent(PJRT_Event* event, const PJRT_Api* api, const
-std::string& event_name) { if (!event) return;
-
-    PJRT_Event_Await_Args await_args;
-    await_args.struct_size = PJRT_Event_Await_Args_STRUCT_SIZE;
-    await_args.extension_start = nullptr;
-    await_args.event = event;
-    // PJRT_Event_Await returns the error status *of the operation that the
-event is tracking*. PJRT_Error* operation_error =
-api->PJRT_Event_Await(&await_args); CheckError(operation_error, api, "Operation
-error from PJRT_Event_Await for " + event_name);
-
-    // Now destroy the event itself
-    PJRT_Event_Destroy_Args destroy_event_args;
-    destroy_event_args.struct_size = PJRT_Event_Destroy_Args_STRUCT_SIZE;
-    destroy_event_args.extension_start = nullptr;
-    destroy_event_args.event = event;
-    PJRT_Error* destroy_err = api->PJRT_Event_Destroy(&destroy_event_args);
-    CheckError(destroy_err, api, "PJRT_Event_Destroy for " + event_name);
-}
 
 
 int main() {
@@ -440,78 +695,6 @@ int main() {
     PJRT_Device* device = nullptr;
 
     try {
-        // 5. Prepare input data
-        std::vector<float> host_input_data = {10.0f, 20.0f, 30.0f, 40.0f};
-        const int64_t input_dims[] = {static_cast<long
-long>(host_input_data.size())}; size_t num_input_dims = 1;
-
-        // 6. Create input buffer on device from host data
-        PJRT_Client_BufferFromHostBuffer_Args bhfh_args;
-        bhfh_args.struct_size =
-PJRT_Client_BufferFromHostBuffer_Args_STRUCT_SIZE; bhfh_args.extension_start =
-nullptr; bhfh_args.client = client; bhfh_args.data = host_input_data.data();
-        bhfh_args.type = PJRT_Buffer_Type_F32;
-        bhfh_args.dims = input_dims;
-        bhfh_args.num_dims = num_input_dims;
-        bhfh_args.byte_strides = nullptr; // Null for dense row-major
-        bhfh_args.num_byte_strides = 0;
-        bhfh_args.host_buffer_semantics =
-PJRT_HostBufferSemantics_kImmutableUntilTransferCompletes; bhfh_args.device =
-device; bhfh_args.memory = nullptr; // Use default memory for the device
-        bhfh_args.device_layout = nullptr; // Use default layout
-        // Output fields:
-        bhfh_args.done_with_host_buffer = nullptr;
-        bhfh_args.buffer = nullptr;
-
-        CheckError(api->PJRT_Client_BufferFromHostBuffer(&bhfh_args), api,
-"PJRT_Client_BufferFromHostBuffer (input)"); input_buffer = bhfh_args.buffer;
-        PJRT_Event* input_transfer_event = bhfh_args.done_with_host_buffer;
-
-        AwaitAndDestroyEvent(input_transfer_event, api, "input H2D transfer");
-        std::cout << "Input buffer created on device and H2D transfer complete."
-<< std::endl;
-
-        // 7. Prepare for Execution
-        PJRT_Buffer* const* single_arg_list = &input_buffer; // Array of input
-buffers for one execution PJRT_Buffer* const* const* all_devices_arg_lists =
-&single_arg_list; // List of arg lists (for one device)
-
-        // Prepare space for output buffers: PJRT_LoadedExecutable_Execute will
-populate this.
-        // For 1 device, 1 output:
-        std::vector<PJRT_Buffer*>
-device_output_buffers_list(num_outputs_per_device); // e.g., {nullptr}
-        PJRT_Buffer** device_output_buffers_array_ptr =
-device_output_buffers_list.data(); PJRT_Buffer** const*
-output_lists_for_execute_arg = &device_output_buffers_array_ptr;
-
-        PJRT_ExecuteOptions execute_options;
-        execute_options.struct_size = PJRT_ExecuteOptions_STRUCT_SIZE;
-        execute_options.extension_start = nullptr;
-        execute_options.launch_id = 0; // Default
-        execute_options.non_donatable_input_indices = nullptr;
-        execute_options.num_non_donatable_input_indices = 0;
-        execute_options.context = nullptr;
-        execute_options.send_callbacks = nullptr;
-        execute_options.recv_callbacks = nullptr;
-        execute_options.num_send_ops = 0;
-        execute_options.num_recv_ops = 0;
-
-        PJRT_LoadedExecutable_Execute_Args execute_args;
-        execute_args.struct_size =
-PJRT_LoadedExecutable_Execute_Args_STRUCT_SIZE; execute_args.extension_start =
-nullptr; execute_args.executable = loaded_executable; execute_args.options =
-&execute_options; execute_args.argument_lists = all_devices_arg_lists;
-        execute_args.num_devices = 1; // Executing on a single device
-        execute_args.num_args = 1;    // The MLIR function takes one argument
-        execute_args.output_lists = output_lists_for_execute_arg; // API
-populates this execute_args.execute_device = device; // Explicitly specify
-single device for execution
-        // Output field for completion event:
-        PJRT_Event* execution_complete_event = nullptr;
-        execute_args.device_complete_events = &execution_complete_event; // For
-single device execution
-
         // 8. Execute the model
         CheckError(api->PJRT_LoadedExecutable_Execute(&execute_args), api,
 "PJRT_LoadedExecutable_Execute"); std::cout << "Execution launched." <<

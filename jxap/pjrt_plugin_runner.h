@@ -1,9 +1,11 @@
 #ifndef JXAP_MLIR_PLUGIN
 #define JXAP_MLIR_PLUGIN
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <set>
+#include <span>
 
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -15,6 +17,11 @@ class PJRTContext;
 class PJRTExecutable;
 class PJRTPluginRunner;
 
+// Owned memory buffer.
+using Buffer = std::vector<std::byte>;
+// Reference to a memory buffer.
+using BufferRef = std::span<std::byte>;
+
 class PJRTCompiledPlugin {
  protected:
   PJRTCompiledPlugin() = default;
@@ -23,27 +30,43 @@ class PJRTCompiledPlugin {
  public:
   ~PJRTCompiledPlugin();
 
-  int buffer_size() const { return buffer_size_; }
+  int audio_buffer_size() const { return audio_buffer_size_; }
 
   float sample_rate() const { return sample_rate_; }
 
-  const std::set<std::string>& input_buffers() const { return input_buffers_; }
+  const std::set<std::string>& input_buffer_names() const { return input_buffer_names_; }
 
-  const std::set<std::string>& output_buffers() const { return output_buffers_; }
+  const std::set<std::string>& output_buffer_names() const { return output_buffer_names_; }
+
+  // Initializes the state of the plugin.
+  // Takes ownership of the input buffers to avoid copying.
+  absl::Status Init(std::vector<Buffer>&& inputs);
+
+  // Updates the state of the plugin.
+  // Takes ownership of the input buffers to avoid copying.
+  // The output buffers are passed to the callback and only live for the duration of this call.
+  absl::Status Update(std::vector<Buffer>&& inputs,
+                      std::function<absl::Status(const std::vector<BufferRef>&)> callback);
 
  private:
-  int buffer_size_;
+  PJRTContext* ctx_;
+
+  int64_t audio_buffer_size_;
+  PJRT_Buffer_Type audio_buffer_type_ = PJRT_Buffer_Type_F32;
   float sample_rate_;
 
   size_t state_size_;
   std::vector<PJRT_Buffer_Type> state_types_;
   std::vector<std::vector<int64_t>> state_dimensions_;
 
-  std::set<std::string> input_buffers_;
-  std::set<std::string> output_buffers_;
+  std::set<std::string> input_buffer_names_;
+  std::set<std::string> output_buffer_names_;
 
   std::unique_ptr<PJRTExecutable> init_fn_;
   std::unique_ptr<PJRTExecutable> update_fn_;
+
+  bool initialized_ = false;
+  std::vector<std::vector<std::byte>> state_;
 };
 
 /**

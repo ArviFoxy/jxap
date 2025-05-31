@@ -17,10 +17,8 @@ class PJRTContext;
 class PJRTExecutable;
 class PJRTPluginRunner;
 
-// Owned memory buffer.
+// Memory buffer.
 using Buffer = std::vector<std::byte>;
-// Reference to a memory buffer.
-using BufferRef = std::span<std::byte>;
 // State of a plugin.
 using PluginState = std::vector<Buffer>;
 
@@ -41,12 +39,12 @@ class PJRTCompiledPlugin {
   const std::set<std::string>& output_buffer_names() const { return output_buffer_names_; }
 
   // Initializes an instance of the plugin.
-  absl::StatusOr<PluginState> Init(std::vector<Buffer> inputs) const;
+  absl::StatusOr<PluginState> Init(const std::vector<Buffer>& inputs) const;
 
   // Updates the state of the plugin.
   // Takes ownership of the input buffers to avoid copying.
   // Writes the outputs to the output buffers (resizing them if needed).
-  absl::Status Update(std::vector<Buffer>&& inputs, PluginState* state,
+  absl::Status Update(const std::vector<Buffer>& inputs, PluginState* state,
                       std::vector<Buffer>* outputs) const;
 
  private:

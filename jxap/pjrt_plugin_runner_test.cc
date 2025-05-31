@@ -29,7 +29,7 @@ TEST(PJRTPluginRunnerTest, CompilesAndRunsPlugin) {
   ASSERT_EQ(compiled_plugin->audio_buffer_size(), buffer_size);
   ASSERT_EQ(compiled_plugin->sample_rate(), 44100.f);
 
-  for (int try_num = 0; try_num < 5; ++try_num) {
+  for (int try_num = 0; try_num < 100; ++try_num) {
     std::vector<Buffer> input_buffers = {Buffer(buffer_size * sizeof(float))};
     std::span<float> input_view(reinterpret_cast<float*>(input_buffers[0].data()), buffer_size);
     for (int i = 0; i < buffer_size; ++i) {
@@ -43,12 +43,14 @@ TEST(PJRTPluginRunnerTest, CompilesAndRunsPlugin) {
 
     LOG(INFO) << "Running update.";
     std::vector<Buffer> output_buffers(1);
-    auto status = compiled_plugin->Update(std::move(input_buffers), &state, &output_buffers);
+    auto status = compiled_plugin->Update(input_buffers, &state, &output_buffers);
     ASSERT_TRUE(status.ok()) << status;
     LOG(INFO) << "Update done.";
 
     // check the output
     std::span<float> output_view(reinterpret_cast<float*>(output_buffers[0].data()), buffer_size);
+    LOG(INFO) << "Outputs: " << output_view[0] << ", " << output_view[1] << ", " << output_view[2]
+              << ", " << output_view[3];
     ASSERT_FLOAT_EQ(output_view[0], 1.0f);
     ASSERT_FLOAT_EQ(output_view[1], 2.0f);
     ASSERT_FLOAT_EQ(output_view[2], 2.0f);

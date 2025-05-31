@@ -192,7 +192,7 @@ class PJRTBuffer {
   const PJRT_Api* api_;
   // Optional: host-owned buffer data. Only used for zero-copy buffer semantics.
   Buffer buffer_data_;
-  // Only used for zero copy: signals that the buffer can be freed now.
+  // Signals that the host buffer is free to use again.
   PJRT_Event* done_with_host_buffer_ = nullptr;
 
   // Zero-copy variant. The buffer data will be owned by this object.
@@ -214,14 +214,18 @@ class PJRTBuffer {
       destroy_args.extension_start = nullptr;
       destroy_args.buffer = buffer_;
       LogAndDestroyError(api_->PJRT_Buffer_Destroy(&destroy_args), api_);
-
-      if (done_with_host_buffer_ != nullptr) {
-        absl::Status status = PJRTAwaitAndDestroyEvent(done_with_host_buffer_, api_);
-        if (!status.ok()) {
-          LOG(ERROR) << "Error when waiting for host buffer to be freed: " << status.message();
-        }
-      }
     }
+    auto status = AwaitDoneWithHostBuffer();
+    if (!status.ok()) {
+      LOG(ERROR) << "AwaitDoneWithHostBuffer failed: " << status.message();
+    }
+  }
+
+  absl::Status AwaitDoneWithHostBuffer() {
+    if (done_with_host_buffer_ == nullptr) return absl::OkStatus();
+    auto status = PJRTAwaitAndDestroyEvent(done_with_host_buffer_, api_);
+    done_with_host_buffer_ = nullptr;
+    return status;
   }
 
   // Movable but not copyable.
@@ -337,7 +341,7 @@ class PJRTBuffer {
     }
   }
 
-  static absl::Status VerifyBufferSize(BufferRef buffer, PJRT_Buffer_Type type,
+  static absl::Status VerifyBufferSize(const Buffer& buffer, PJRT_Buffer_Type type,
                                        const std::vector<int64_t>& dims) {
     auto status_or_element_size = TypeToElementSize(type);
     RETURN_IF_ERROR(status_or_element_size.status());
@@ -353,7 +357,7 @@ class PJRTBuffer {
     return absl::OkStatus();
   }
 
-  static absl::StatusOr<PJRTBuffer> FromHostCopy(BufferRef buffer, PJRT_Buffer_Type type,
+  static absl::StatusOr<PJRTBuffer> FromHostCopy(const Buffer& buffer, PJRT_Buffer_Type type,
                                                  const std::vector<int64_t>& dims,
                                                  PJRTContext* ctx) {
     RETURN_IF_ERROR(VerifyBufferSize(buffer, type, dims));
@@ -377,7 +381,6 @@ class PJRTBuffer {
     args.buffer = nullptr;
 
     RETURN_IF_PJRT_ERROR(ctx->api->PJRT_Client_BufferFromHostBuffer(&args), ctx->api);
-    RETURN_IF_ERROR(PJRTAwaitAndDestroyEvent(args.done_with_host_buffer, ctx->api));
     return PJRTBuffer(args.buffer, ctx->api);
   }
 
@@ -396,7 +399,7 @@ class PJRTBuffer {
     args.num_dims = dims.size();
     args.byte_strides = nullptr;  // Null for dense row-major
     args.num_byte_strides = 0;
-    args.host_buffer_semantics = PJRT_HostBufferSemantics_kMutableZeroCopy;
+    args.host_buffer_semantics = PJRT_HostBufferSemantics_kImmutableZeroCopy;
     args.device = ctx->device;
     args.memory = nullptr;         // Use default memory for the device
     args.device_layout = nullptr;  // Use default layout
@@ -439,12 +442,18 @@ class PJRTBuffer {
     bth_args.struct_size = PJRT_Buffer_ToHostBuffer_Args_STRUCT_SIZE;
     bth_args.extension_start = nullptr;
     bth_args.src = buffer_;
-    bth_args.dst = out_buffer->data();
-    bth_args.dst_size = out_buffer->size();
     bth_args.host_layout = nullptr;  // Use default/current layout
+    bth_args.dst = nullptr;
+    bth_args.dst_size = 0;
     // Output field:
     bth_args.event = nullptr;
 
+    // First call: query size.
+    RETURN_IF_PJRT_ERROR(api_->PJRT_Buffer_ToHostBuffer(&bth_args), api_);
+    out_buffer->resize(bth_args.dst_size);
+    bth_args.dst = out_buffer->data();
+    DLOG(INFO) << "ToHostBuffer() transferring buffer of size: " << bth_args.dst_size;
+    // Second call: transfer.
     RETURN_IF_PJRT_ERROR(api_->PJRT_Buffer_ToHostBuffer(&bth_args), api_);
     RETURN_IF_ERROR(PJRTAwaitAndDestroyEvent(bth_args.event, api_));
     return absl::OkStatus();
@@ -662,7 +671,7 @@ class PJRTExecutable {
 
 PJRTCompiledPlugin::~PJRTCompiledPlugin() {}
 
-absl::StatusOr<PluginState> PJRTCompiledPlugin::Init(std::vector<Buffer> inputs) const {
+absl::StatusOr<PluginState> PJRTCompiledPlugin::Init(const std::vector<Buffer>& inputs) const {
   if (inputs.size() != input_buffer_names_.size()) {
     return absl::InvalidArgumentError(
         "PJRTCompiledPlugin::Init() inputs size doesn't match expected buffer number.");
@@ -679,9 +688,8 @@ absl::StatusOr<PluginState> PJRTCompiledPlugin::Init(std::vector<Buffer> inputs)
   input_buffers.push_back(std::move(status_or_platform_buffer.value()));
   // Audio input buffer arguments.
   for (size_t i = 0; i < inputs.size(); ++i) {
-    auto status_or_buffer =
-        PJRTBuffer::FromHostZeroCopy(std::move(inputs[i]), /*type=*/audio_buffer_type_,
-                                     /*dims=*/{audio_buffer_size_}, ctx_);
+    auto status_or_buffer = PJRTBuffer::FromHostCopy(inputs[i], /*type=*/audio_buffer_type_,
+                                                     /*dims=*/{audio_buffer_size_}, ctx_);
     RETURN_IF_ERROR(status_or_buffer.status());
     input_buffers.push_back(std::move(status_or_buffer.value()));
   }
@@ -696,18 +704,13 @@ absl::StatusOr<PluginState> PJRTCompiledPlugin::Init(std::vector<Buffer> inputs)
 
   std::vector<Buffer> state(state_size_);
   for (size_t i = 0; i < state.size(); ++i) {
-    auto status_or_buffer_size = output_buffers[i].Size();
-    RETURN_IF_ERROR(status_or_buffer_size.status());
-    LOG(INFO) << "PJRTCompiledPlugin::Init() creating state buffer of size: "
-              << status_or_buffer_size.value();
-    state[i].resize(status_or_buffer_size.value());
     RETURN_IF_ERROR(output_buffers[i].ToHostBuffer(&state[i]));
   }
   LOG(INFO) << "Plugin state initialized: " << state.size() << " elements.";
   return state;
 }
 
-absl::Status PJRTCompiledPlugin::Update(std::vector<Buffer>&& inputs, PluginState* state,
+absl::Status PJRTCompiledPlugin::Update(const std::vector<Buffer>& inputs, PluginState* state,
                                         std::vector<Buffer>* outputs) const {
   if (inputs.size() != input_buffer_names_.size()) {
     return absl::InvalidArgumentError(
@@ -728,7 +731,7 @@ absl::Status PJRTCompiledPlugin::Update(std::vector<Buffer>&& inputs, PluginStat
       PJRTBuffer::FromHostCopy(platform_buffer, PJRT_Buffer_Type_S32, {1}, ctx_);
   RETURN_IF_ERROR(status_or_platform_buffer.status());
   input_buffers.push_back(std::move(status_or_platform_buffer.value()));
-  // State. This is copied as we will use the buffers to store the new state.
+  // State.
   for (size_t i = 0; i < state->size(); ++i) {
     auto status_or_buffer = PJRTBuffer::FromHostCopy(state->at(i), /*type=*/state_types_[i],
                                                      /*dims=*/state_dimensions_[i], ctx_);
@@ -737,9 +740,8 @@ absl::Status PJRTCompiledPlugin::Update(std::vector<Buffer>&& inputs, PluginStat
   }
   // Audio input buffer arguments.
   for (size_t i = 0; i < inputs.size(); ++i) {
-    auto status_or_buffer =
-        PJRTBuffer::FromHostZeroCopy(std::move(inputs[i]), /*type=*/audio_buffer_type_,
-                                     /*dims=*/{audio_buffer_size_}, ctx_);
+    auto status_or_buffer = PJRTBuffer::FromHostCopy(inputs[i], /*type=*/audio_buffer_type_,
+                                                     /*dims=*/{audio_buffer_size_}, ctx_);
     RETURN_IF_ERROR(status_or_buffer.status());
     input_buffers.push_back(std::move(status_or_buffer.value()));
   }
@@ -756,23 +758,12 @@ absl::Status PJRTCompiledPlugin::Update(std::vector<Buffer>&& inputs, PluginStat
 
   // Get the states.
   for (size_t i = 0; i < state->size(); ++i) {
-    auto status_or_buffer_size = output_buffers[i].Size();
-    RETURN_IF_ERROR(status_or_buffer_size.status());
-    if (state->at(i).size() != status_or_buffer_size.value()) {
-      return absl::InternalError(
-          "PJRTCompuiledPlugin::Update() returned state buffer with size not matching expected "
-          "size.");
-    }
     RETURN_IF_ERROR(output_buffers[i].ToHostBuffer(&state->at(i)));
   }
   DLOG(INFO) << "Copied state buffers.";
   // Get the output buffers.
   for (size_t i = 0; i < outputs->size(); ++i) {
-    size_t buffer_index = i + state_size_;
-    auto status_or_buffer_size = output_buffers[buffer_index].Size();
-    RETURN_IF_ERROR(status_or_buffer_size.status());
-    outputs->at(i).resize(status_or_buffer_size.value());
-    RETURN_IF_ERROR(output_buffers[buffer_index].ToHostBuffer(&outputs->at(i)));
+    RETURN_IF_ERROR(output_buffers[i + state_size_].ToHostBuffer(&outputs->at(i)));
   }
   DLOG(INFO) << "Copied outputs.";
   return absl::OkStatus();
@@ -884,87 +875,3 @@ absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(
 }
 
 }  // namespace jxap
-
-/*
-// Helper to await and then destroy an event
-
-
-int main() {
-
-    PJRT_Client* client = nullptr;
-    PJRT_LoadedExecutable* loaded_executable = nullptr;
-    PJRT_Executable* underlying_executable = nullptr; // For querying properties
-    PJRT_Buffer* input_buffer = nullptr;
-    PJRT_Buffer* output_buffer_from_execute = nullptr;
-    PJRT_Device* device = nullptr;
-
-    try {
-        // 9. Get output buffer details to prepare host memory
-        PJRT_Buffer_Dimensions_Args out_dim_args;
-        out_dim_args.struct_size = PJRT_Buffer_Dimensions_Args_STRUCT_SIZE;
-        out_dim_args.extension_start = nullptr;
-        out_dim_args.buffer = output_buffer_from_execute;
-        CheckError(api->PJRT_Buffer_Dimensions(&out_dim_args), api,
-"PJRT_Buffer_Dimensions (output)");
-
-        PJRT_Buffer_ElementType_Args out_type_args;
-        out_type_args.struct_size = PJRT_Buffer_ElementType_Args_STRUCT_SIZE;
-        out_type_args.extension_start = nullptr;
-        out_type_args.buffer = output_buffer_from_execute;
-        CheckError(api->PJRT_Buffer_ElementType(&out_type_args), api,
-"PJRT_Buffer_ElementType (output)");
-
-        if (out_type_args.type != PJRT_Buffer_Type_F32) {
-            throw std::runtime_error("Output buffer type is not F32 as
-expected.");
-        }
-        size_t num_output_elements = 1;
-        std::cout << "Output buffer has " << out_dim_args.num_dims << "
-dimension(s): "; for (size_t i = 0; i < out_dim_args.num_dims; ++i) {
-            num_output_elements *= out_dim_args.dims[i];
-            std::cout << out_dim_args.dims[i] << " ";
-        }
-        std::cout << "(Total elements: " << num_output_elements << ")" <<
-std::endl;
-
-        std::vector<float> host_output_data(num_output_elements);
-
-        // 10. Transfer output from device to host
-        PJRT_Buffer_ToHostBuffer_Args bth_args;
-        bth_args.struct_size = PJRT_Buffer_ToHostBuffer_Args_STRUCT_SIZE;
-        bth_args.extension_start = nullptr;
-        bth_args.src = output_buffer_from_execute;
-        bth_args.dst = host_output_data.data();
-        bth_args.dst_size = host_output_data.size() * sizeof(float);
-        bth_args.host_layout = nullptr; // Use default/current layout
-        // Output field:
-        bth_args.event = nullptr;
-
-        CheckError(api->PJRT_Buffer_ToHostBuffer(&bth_args), api,
-"PJRT_Buffer_ToHostBuffer (output)"); PJRT_Event* output_transfer_event =
-bth_args.event;
-
-        AwaitAndDestroyEvent(output_transfer_event, api, "output D2H transfer");
-        std::cout << "Output buffer transferred to host." << std::endl;
-
-        // 11. Process/Print Output Data
-        std::cout << "Output data from device: ";
-        for (size_t i = 0; i < host_output_data.size(); ++i) {
-            std::cout << host_output_data[i] << (i == host_output_data.size() -
-1 ? "" : ", ");
-        }
-        std::cout << std::endl;
-
-    } catch (const std::runtime_error& e) {
-        std::cerr << "Runtime Error: " << e.what() << std::endl;
-        // Note: Resources might not be fully cleaned up here if error occurs
-mid-setup
-    }
-
-    // 12. Cleanup
-    std::cout << "Cleaning up resources..." << std::endl;
-
-    std::cout << "Execution finished successfully." << std::endl;
-    return 0;
-}
-*/

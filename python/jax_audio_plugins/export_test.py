@@ -36,9 +36,9 @@ class TestPlugin(types.Plugin[TestPluginState]):
                sample_rate):
         del sample_rate  # Unused.
         x = inputs["input"]
-        x_1 = jnp.concatenate([x[1:], state.last_sample[jnp.newaxis]], axis=0)
+        x_1 = jnp.concatenate([state.last_sample[jnp.newaxis], x[:-1]], axis=0)
         y = x + x_1 + state.last_buffer
-        new_state = TestPluginState(last_sample=x[0], last_buffer=x)
+        new_state = TestPluginState(last_sample=x[-1], last_buffer=x)
         return new_state, {"output": y}
 
 

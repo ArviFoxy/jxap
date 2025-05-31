@@ -8,6 +8,10 @@ import equinox as eqx
 from jaxtyping import Array, Float
 
 # Audio buffer type.
+# Samples are ordered so that:
+#   - buffer[0] is the earliest played sample.
+#   - buffer[1] is the second earliest played sample.
+#   - buffer[-1] is the latest.
 Buffer = Float[Array, "BufferSize"]
 
 # Re-exported for convenience.

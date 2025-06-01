@@ -31,4 +31,10 @@ absl::Status WriteFile(const std::filesystem::path& path, const std::string& con
   return absl::OkStatus();
 }
 
+absl::Status AppendLocToStatus(absl::Status status, std::source_location loc) {
+  return absl::Status(status.code(),
+                      absl::StrCat(status.message(), "\nTraceback: ", loc.file_name(), ":",
+                                   loc.line(), " in function ", loc.function_name(), "."));
+}
+
 }  // namespace jxap

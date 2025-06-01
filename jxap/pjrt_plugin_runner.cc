@@ -56,27 +56,12 @@ void LogAndDestroyError(PJRT_Error* error, const PJRT_Api* api) {
   DestroyError(error, api);
 }
 
-absl::Status AppendLocToStatus(absl::Status status, std::source_location loc) {
-  return absl::Status(status.code(),
-                      absl::StrCat(status.message(), "\nTraceback: ", loc.file_name(), ":",
-                                   loc.line(), " in function ", loc.function_name(), "."));
-}
-
 #define RETURN_IF_PJRT_ERROR(error_expr, api)               \
   {                                                         \
     PJRT_Error* error = error_expr;                         \
     if (error != nullptr) {                                 \
       absl::Status status_ = ErrorToStatus(error, api);     \
       DestroyError(error, api);                             \
-      constexpr auto loc = std::source_location::current(); \
-      return AppendLocToStatus(status_, loc);               \
-    }                                                       \
-  }
-
-#define RETURN_IF_ERROR(status_expr)                        \
-  {                                                         \
-    absl::Status status_ = status_expr;                     \
-    if (!status_.ok()) {                                    \
       constexpr auto loc = std::source_location::current(); \
       return AppendLocToStatus(status_, loc);               \
     }                                                       \

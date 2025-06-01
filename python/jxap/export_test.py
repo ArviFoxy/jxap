@@ -1,5 +1,6 @@
 """Tests for plugin exporting."""
 
+import dataclasses
 import os
 
 from absl import flags
@@ -20,6 +21,7 @@ class TestPluginState(eqx.Module):
     last_buffer: jax.Array
 
 
+@dataclasses.dataclass()
 class TestPlugin(types.Plugin[TestPluginState]):
 
     @property
@@ -46,7 +48,7 @@ class ExportingTest(test_utils.TestCase):
 
     def test_export_plugin(self):
         plugin_config = TestPlugin()
-        path = os.path.join(absltest.TEST_TMPDIR.value, "plugin.jxap")
+        path = os.path.join(absltest.TEST_TMPDIR.value, "test_plugin.jxap")
         export.export_plugin(plugin_config).save(path)
 
 

@@ -68,6 +68,7 @@ class PackagedPlugin:
 
     In this format JAX functions have been exported to MLIR.
     """
+    name: str
     init_mlir: str
     update_mlir: str
     input_buffer_names: Sequence[str]
@@ -77,6 +78,7 @@ class PackagedPlugin:
         """Saves the plugin to a JXAP plugin file (zip)."""
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with zipfile.ZipFile(file_path, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            zip_file.writestr("name.txt", self.name)
             zip_file.writestr("init.mlir", self.init_mlir)
             zip_file.writestr("update.mlir", self.update_mlir)
             zip_file.writestr("input_buffer_names.txt",
@@ -126,7 +128,8 @@ def export_plugin(plugin: types.Plugin,
     if platforms is None:
         platforms = _ALL_PLATFORMS
 
-    logging.info("Exporting plugin %s:", type(plugin))
+    name = repr(plugin)
+    logging.info("Exporting plugin %s:", name)
     scope = _make_scope(dtype)
 
     state_tree_def = _TreeDefClosure()
@@ -169,6 +172,7 @@ def export_plugin(plugin: types.Plugin,
     logging.info('  output buffer names: %s', output_buffer_names)
 
     return PackagedPlugin(
+        name=name,
         init_mlir=exported_init_fn.mlir_module(),
         update_mlir=exported_update_fn.mlir_module(),
         input_buffer_names=plugin.input_buffer_names,

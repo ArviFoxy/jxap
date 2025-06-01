@@ -66,6 +66,16 @@ find_package(Protobuf REQUIRED)
 include(StableHLO.cmake)
 include(XLA.cmake)
 
+# --- Fetch and build minizip-ng ---
+FetchContent_Declare(
+  minizip_ng
+  GIT_REPOSITORY https://github.com/zlib-ng/minizip-ng.git
+  GIT_TAG        4.0.10
+)
+set(MZ_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(MZ_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(minizip_ng)
+
 # --- Directories ---
 
 message(STATUS "Adding include dir: ${CMAKE_CURRENT_SOURCE_DIR}")
@@ -73,7 +83,26 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 # --- Targets ---
 
-# PJRT plugin runner.
+# Common libraries.
+message(STATUS "Building JXAP common library")
+add_library(jxap_common STATIC
+    jxap/utils.h
+    jxap/utils.cc
+    jxap/packaged_plugin.h
+    jxap/packaged_plugin.cc)
+target_link_libraries(jxap_common
+    PRIVATE
+    absl::strings
+    absl::log
+    minizip
+
+    PUBLIC
+    absl::status
+    absl::statusor
+)
+llvm_update_compile_flags(jxap_common)
+
+# MLIR compiler passes.
 message(STATUS "Building MLIR passes")
 add_library(jxap_mlir_passes STATIC
     jxap/mlir_passes.h
@@ -88,10 +117,9 @@ target_link_libraries(jxap_mlir_passes
 llvm_update_compile_flags(jxap_mlir_passes)
 mlir_check_all_link_libraries(jxap_mlir_passes)
 
+# PJRT plugin runner.
 message(STATUS "Building PJRT plugin runner")
 add_library(jxap_pjrt_plugin_runner STATIC
-    jxap/utils.h
-    jxap/utils.cc
     jxap/mlir_pipeline.h
     jxap/mlir_pipeline.cc
     jxap/pjrt_plugin_runner.h
@@ -110,25 +138,40 @@ target_link_libraries(jxap_pjrt_plugin_runner
 
     PUBLIC
     XLA::pjrt_c_api
-    absl::status
-    absl::statusor
+    jxap_common
     jxap_mlir_passes
 )
 llvm_update_compile_flags(jxap_pjrt_plugin_runner)
 mlir_check_all_link_libraries(jxap_pjrt_plugin_runner)
 
+#message(STATUS "Building pipewire runner")
+#add_executable(jxap_pipewire_run
+#    jxap/pipewire_run.cc)
+#target_link_libraries(jxap_pipewire_run
+#    PRIVATE
+#    absl::strings
+#    absl::log
+#    absl::flags
+#    jxap_pjrt_plugin_runner
+#    PkgConfig::PIPEWIRE
+#)
+#llvm_update_compile_flags(jxap_pipewire_run)
+
 # --- Testing ---
 message(STATUS "Building tests [working dir ${CMAKE_CURRENT_BINARY_DIR}]")
 
 add_executable(jxap_pjrt_plugin_runner_tests
+    jxap/packaged_plugin_test.cc
     jxap/mlir_pipeline_test.cc
     jxap/pjrt_plugin_runner_test.cc)
 target_link_libraries(jxap_pjrt_plugin_runner_tests PRIVATE
     GTest::gtest_main
+    jxap_common
     jxap_pjrt_plugin_runner
 )
 add_test_data_files(
     jxap_pjrt_plugin_runner_tests
+    "jxap/testdata/test_plugin.jxap"
     "jxap/testdata/test_plugin.jxap-init"
     "jxap/testdata/test_plugin.jxap-update"
 )

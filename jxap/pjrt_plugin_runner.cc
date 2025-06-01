@@ -579,7 +579,7 @@ class PJRTExecutable {
     return output_buffers;
   }
 
-  void PrintStats(absl::string_view path, absl::string_view method) const {
+  void PrintStats(absl::string_view name, absl::string_view method) const {
     if (executable == nullptr) return;
 
     PJRT_Executable_GetCompiledMemoryStats_Args stats_args;
@@ -591,7 +591,7 @@ class PJRTExecutable {
     LOG(INFO) << "-------------------------------------------------------------"
                  "-------------------";
     LOG(INFO) << "| Compilation statistics for:";
-    LOG(INFO) << "|   plugin: " << path;
+    LOG(INFO) << "|   plugin: " << name;
     LOG(INFO) << "|   method: " << method;
     LOG(INFO) << "| Generated code size (bytes) : " << stats_args.generated_code_size_in_bytes;
     LOG(INFO) << "| Argument size       (bytes) : " << stats_args.argument_size_in_bytes;
@@ -657,7 +657,7 @@ class PJRTExecutable {
 PJRTCompiledPlugin::~PJRTCompiledPlugin() {}
 
 absl::StatusOr<PluginState> PJRTCompiledPlugin::Init(const std::vector<Buffer>& inputs) const {
-  if (inputs.size() != input_buffer_names_.size()) {
+  if (inputs.size() != packaged_plugin_.input_buffer_names.size()) {
     return absl::InvalidArgumentError(
         "PJRTCompiledPlugin::Init() inputs size doesn't match expected buffer number.");
   }
@@ -697,11 +697,11 @@ absl::StatusOr<PluginState> PJRTCompiledPlugin::Init(const std::vector<Buffer>& 
 
 absl::Status PJRTCompiledPlugin::Update(const std::vector<Buffer>& inputs, PluginState* state,
                                         std::vector<Buffer>* outputs) const {
-  if (inputs.size() != input_buffer_names_.size()) {
+  if (inputs.size() != packaged_plugin_.input_buffer_names.size()) {
     return absl::InvalidArgumentError(
         "PJRTCompiledPlugin::Update() inputs size doesn't match expected buffer number.");
   }
-  if (outputs->size() != output_buffer_names_.size()) {
+  if (outputs->size() != packaged_plugin_.output_buffer_names.size()) {
     return absl::InvalidArgumentError(
         "PJRTCompiledPlugin::Update() outputs size doesn't match expected buffer number.");
   }
@@ -735,7 +735,7 @@ absl::Status PJRTCompiledPlugin::Update(const std::vector<Buffer>& inputs, Plugi
   auto status_or_output_buffers = update_fn_->Execute(std::move(input_buffers));
   RETURN_IF_ERROR(status_or_output_buffers.status());
   auto& output_buffers = status_or_output_buffers.value();
-  if (output_buffers.size() != output_buffer_names_.size() + state_size_) {
+  if (output_buffers.size() != packaged_plugin_.output_buffer_names.size() + state_size_) {
     return absl::InternalError(absl::StrCat(
         "PJRTCompuiledPlugin::Update() output size does not match output buffers + state_size_."));
   }
@@ -757,38 +757,28 @@ absl::Status PJRTCompiledPlugin::Update(const std::vector<Buffer>& inputs, Plugi
 PJRTPluginRunner::~PJRTPluginRunner() {}
 
 absl::StatusOr<std::unique_ptr<PJRTPluginRunner>> PJRTPluginRunner::LoadPlugin(
-    absl::string_view path) {
+    const PackagedPlugin& packaged_plugin) {
   std::unique_ptr<PJRTPluginRunner> plugin(new PJRTPluginRunner());
-  plugin->path_ = path;
+  plugin->packaged_plugin_ = packaged_plugin;
 
   absl::StatusOr<std::unique_ptr<PJRTContext>> status_or_ctx = PJRTContext::Create();
   RETURN_IF_ERROR(status_or_ctx.status());
   plugin->ctx_ = std::move(status_or_ctx.value());
 
-  absl::StatusOr<std::string> init_fn_mlir = ReadFile(absl::StrCat(path, "-init"));
-  RETURN_IF_ERROR(init_fn_mlir.status());
-  plugin->init_fn_mlir_ = std::move(init_fn_mlir.value());
-
-  absl::StatusOr<std::string> update_fn_mlir = ReadFile(absl::StrCat(path, "-update"));
-  RETURN_IF_ERROR(update_fn_mlir.status());
-  plugin->update_fn_mlir_ = std::move(update_fn_mlir.value());
-
   return plugin;
 }
 
-absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(
-    const std::set<std::string>& input_buffers, const std::set<std::string>& output_buffers,
-    int buffer_size, float sample_rate) {
+absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(int buffer_size,
+                                                                              float sample_rate) {
   std::unique_ptr<PJRTCompiledPlugin> compiled_plugin(new PJRTCompiledPlugin());
   compiled_plugin->ctx_ = ctx_.get();
-  compiled_plugin->input_buffer_names_ = input_buffers;
-  compiled_plugin->output_buffer_names_ = output_buffers;
+  compiled_plugin->packaged_plugin_ = packaged_plugin_;
   compiled_plugin->audio_buffer_size_ = buffer_size;
   compiled_plugin->sample_rate_ = sample_rate;
 
   std::vector<ArgumentTransform> transforms;
   transforms.push_back(RefineType(MlirTensorType({}, "i32")));  // platform index
-  for (const std::string& _ : input_buffers) {
+  for (const std::string& _ : packaged_plugin_.input_buffer_names) {
     transforms.push_back(RefineType(MlirTensorType({buffer_size}, "f32")));
   }
   transforms.push_back(ReplaceWithConstant(sample_rate));  // sample rate
@@ -798,7 +788,7 @@ absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(
   // TODO: support platforms other than CPU.
   global_to_value["_platform_index"] = 0;
 
-  auto status_or_init_mlir = MlirPipeline(init_fn_mlir_, transforms, global_to_value);
+  auto status_or_init_mlir = MlirPipeline(packaged_plugin_.init_mlir, transforms, global_to_value);
   RETURN_IF_ERROR(status_or_init_mlir.status());
   std::string init_mlir = status_or_init_mlir.value();
   LOG(INFO) << "Compiling plugin init method MLIR:\n" << init_mlir;
@@ -806,7 +796,7 @@ absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(
   auto status_or_init_excutable = PJRTExecutable::Load(init_mlir, ctx_.get());
   RETURN_IF_ERROR(status_or_init_excutable.status());
   compiled_plugin->init_fn_ = std::move(status_or_init_excutable.value());
-  compiled_plugin->init_fn_->PrintStats(path_, "init");
+  compiled_plugin->init_fn_->PrintStats(packaged_plugin_.name, "init");
 
   // TODO: verify plugin inputs.
 
@@ -841,12 +831,13 @@ absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(
     RETURN_IF_ERROR(status_or_mlir_type.status());
     transforms.push_back(RefineType(MlirTensorType(dimensions[i], status_or_mlir_type.value())));
   }
-  for (const std::string& _ : input_buffers) {
+  for (const std::string& _ : packaged_plugin_.input_buffer_names) {
     transforms.push_back(RefineType(MlirTensorType({buffer_size}, "f32")));
   }
   transforms.push_back(ReplaceWithConstant(sample_rate));  // sample rate
 
-  auto status_or_update_mlir = MlirPipeline(update_fn_mlir_, transforms, global_to_value);
+  auto status_or_update_mlir =
+      MlirPipeline(packaged_plugin_.update_mlir, transforms, global_to_value);
   RETURN_IF_ERROR(status_or_init_mlir.status());
   std::string update_mlir = status_or_update_mlir.value();
   LOG(INFO) << "Compiling plugin update method MLIR:\n" << update_mlir;
@@ -854,7 +845,7 @@ absl::StatusOr<std::unique_ptr<PJRTCompiledPlugin>> PJRTPluginRunner::Compile(
   auto status_or_update_excutable = PJRTExecutable::Load(update_mlir, ctx_.get());
   RETURN_IF_ERROR(status_or_update_excutable.status());
   compiled_plugin->update_fn_ = std::move(status_or_update_excutable.value());
-  compiled_plugin->update_fn_->PrintStats(path_, "update");
+  compiled_plugin->update_fn_->PrintStats(packaged_plugin_.name, "update");
 
   return compiled_plugin;
 }

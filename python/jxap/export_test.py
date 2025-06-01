@@ -8,9 +8,9 @@ import jax
 import jax.numpy as jnp
 
 import equinox as eqx
-from jax_audio_plugins import types
-from jax_audio_plugins import export
-from jax_audio_plugins import test_utils
+from jxap import types
+from jxap import export
+from jxap import test_utils
 
 FLAGS = flags.FLAGS
 

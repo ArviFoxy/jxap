@@ -32,7 +32,7 @@
   "python.testing.unittestArgs": [
     "-v",
     "-s",
-    "./python/jax_audio_plugins",
+    "./python/jxap",
     "-p",
     "*_test.py"
   ],

@@ -10,7 +10,7 @@ import jax.export
 from jaxtyping import PyTree
 import numpy as np
 
-from jax_audio_plugins import types
+from jxap import types
 
 _ALL_PLATFORMS = ["cpu", "cuda", "rocm"]
 

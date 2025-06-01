@@ -3,9 +3,12 @@
 import dataclasses
 import os
 from typing import Any, Sequence
+import zipfile
 
 from absl import logging
 import jax
+import jax.core as jcore
+import jax.tree_util as jtu
 import jax.export
 from jaxtyping import PyTree
 import numpy as np
@@ -59,10 +62,59 @@ class _TreeDefClosure:
     tree_def: Any | None = None
 
 
+@dataclasses.dataclass(slots=True, frozen=True)
+class PackagedPlugin:
+    """Plugin packaged for export.
+
+    In this format JAX functions have been exported to MLIR.
+    """
+    init_mlir: str
+    update_mlir: str
+    input_buffer_names: Sequence[str]
+    output_buffer_names: Sequence[str]
+
+    def save(self, file_path) -> None:
+        """Saves the plugin to a JXAP plugin file (zip)."""
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with zipfile.ZipFile(file_path, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            zip_file.writestr("init.mlir", self.init_mlir)
+            zip_file.writestr("update.mlir", self.update_mlir)
+            zip_file.writestr("input_buffer_names.txt",
+                              "\n".join(self.input_buffer_names))
+            zip_file.writestr("output_buffer_names.txt",
+                              "\n".join(self.output_buffer_names))
+        logging.info('Saved plugin to %s', file_path)
+
+
+def _check_plugin_output_update_shape(pytree: PyTree, expected_dtype: np.dtype,
+                                      buffer_size: DimSize) -> None:
+    if not isinstance(pytree, tuple):
+        raise ValueError(
+            "Plugin update() must return a (state, outputs) tuple, was: {pytree}"
+        )
+    outputs_tree = pytree[1]
+    if not isinstance(outputs_tree, dict):
+        raise ValueError(
+            f"Plugin update() outputs must be a dictionary, was: {outputs_tree}"
+        )
+    for key, child in outputs_tree.items():
+        if not isinstance(child, jcore.ShapedArray):
+            raise ValueError(
+                f"Plugin update() output {key} must be a Jax array, was: {child}"
+            )
+        if child.dtype != expected_dtype:
+            raise ValueError(
+                f"Plugin update() output {key} must have dtype {expected_dtype}, was: {child}"
+            )
+        if child.shape != (buffer_size,):
+            raise ValueError(
+                f"Plugin update() output {key} must have shape ({buffer_size},), was: {child}"
+            )
+
+
 def export_plugin(plugin: types.Plugin,
-                  path: str,
                   dtype: np.dtype = np.float32,
-                  platforms: Sequence[str] | None = None) -> None:
+                  platforms: Sequence[str] | None = None) -> PackagedPlugin:
     """Exports an audio plugin to a file.
     
     Args:
@@ -91,11 +143,6 @@ def export_plugin(plugin: types.Plugin,
     logging.info("  init inputs: %s", exported_init_fn.in_avals)
     logging.info("  init output tree: %s", exported_init_fn.out_tree)
     logging.info("  init outputs: %s", exported_init_fn.out_avals)
-    init_path = f"{path}-init"
-    logging.info("Saving to %s...", init_path)
-    os.makedirs(os.path.dirname(init_path), exist_ok=True)
-    with open(init_path, 'w', encoding='utf-8') as out_file:
-        out_file.write(exported_init_fn.mlir_module())
 
     def _update_fn(state, buffers, sample_rate):
         state = jax.tree.unflatten(state_tree_def.tree_def, state)
@@ -111,8 +158,19 @@ def export_plugin(plugin: types.Plugin,
     logging.info("  update inputs: %s", exported_update_fn.in_avals)
     logging.info("  update output tree: %s", exported_update_fn.out_tree)
     logging.info("  update outputs: %s", exported_update_fn.out_avals)
-    update_path = f"{path}-update"
-    logging.info("Saving to %s...", update_path)
-    os.makedirs(os.path.dirname(update_path), exist_ok=True)
-    with open(update_path, 'w', encoding='utf-8') as out_file:
-        out_file.write(exported_update_fn.mlir_module())
+
+    # TODO: check all the input/output shapes.
+    update_out_tree = jtu.tree_unflatten(exported_update_fn.out_tree,
+                                         exported_update_fn.out_avals)
+    _check_plugin_output_update_shape(update_out_tree, dtype, scope.buffer_size)
+
+    output_buffer_names = list(update_out_tree[1].keys())
+    logging.info('  input buffer names: %s', plugin.input_buffer_names)
+    logging.info('  output buffer names: %s', output_buffer_names)
+
+    return PackagedPlugin(
+        init_mlir=exported_init_fn.mlir_module(),
+        update_mlir=exported_update_fn.mlir_module(),
+        input_buffer_names=plugin.input_buffer_names,
+        output_buffer_names=output_buffer_names,
+    )

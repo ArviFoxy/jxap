@@ -12,12 +12,14 @@
     "**/.git/objects/**": true,
     "**/.git/subtree-cache/**": true,
     "**/node_modules/*/**": true,
-    "build/**": true // Exclude build directory from file watcher
+    "build/**": true, // Exclude build directory from file watcher
+    "install/**": true // Exclude install directory (lots of headers)
   },
   "search.exclude": {
     "**/node_modules": true,
     "**/bower_components": true,
-    "build/": true // Exclude build directory from search
+    "build/": true, // Exclude build directory from search
+    "install/": true // Exclude install directory (lots of headers)
   },
   // C/C++ specific settings (can be overridden by devcontainer.json)
   "C_Cpp.default.cppStandard": "c++17",
@@ -38,6 +40,11 @@
   ],
   "python.analysis.extraPaths": [
     "${workspaceFolder}/python"
+  ],
+  "python.analysis.exclude": [
+    ".git",
+    "build/**",
+    "install/**"
   ],
   // CMake Tools specific settings
   "cmake.configureOnOpen": true,

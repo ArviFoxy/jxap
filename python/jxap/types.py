@@ -43,12 +43,12 @@ class Plugin(Protocol, Generic[PluginState]):
         sample_rate: Float[Array, ""],
     ) -> tuple[PluginState, Mapping[str, Buffer]]:
         """Processes a frame of audio data.
-        
+
         Args:
           state: State of the plugin.
           inputs: Input buffers.
-          sample_rate: Sample rate.
-  
+          sample_rate: Sample rate [Hz], i.e. 1/44100 Hz.
+
         Returns:
           New state and output buffers.
         """
@@ -78,4 +78,12 @@ class StatelessPlugin(Plugin[EmptyState]):
     @abc.abstractmethod
     def process(self, inputs: Mapping[str, Buffer],
                 sample_rate: Float[Array, ""]) -> Mapping[str, Buffer]:
-        """Processes a frame of audio data."""
+        """Processes a frame of audio data.
+
+        Args:
+          inputs: Input buffers.
+          sample_rate: Sample rate [Hz], i.e. 1/44100 Hz.
+
+        Returns:
+          Output buffers.
+          """

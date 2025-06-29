@@ -65,34 +65,48 @@ set_target_properties(XLA::pjrt_c_api PROPERTIES
 )
 add_dependencies(XLA::pjrt_c_api xla_project)
 
-# PJRT CPU plugin
-add_library(XLA::pjrt_c_api_cpu SHARED IMPORTED)
-set_target_properties(XLA::pjrt_c_api_cpu PROPERTIES
-    IMPORTED_LOCATION             "${XLA_PJRT_CPU_LIB}"
-    INTERFACE_INCLUDE_DIRECTORIES "${XLA_SOURCE_DIR}"
-)
-add_dependencies(XLA::pjrt_c_api_cpu xla_project)
+# Imported shared libraries
+function(add_xla_shared_library target_name so_file)
+    find_program(PATCHELF_EXECUTABLE patchelf REQUIRED)
+    get_filename_component(so_filename "${so_file}" NAME)
 
-# Protos
-function(add_xla_proto_library target_name so_file)
+    set(so_patched_file "${CMAKE_CURRENT_BINARY_DIR}/lib/${so_filename}")
+    set(so_patched_target "${so_filename}_patched")
+    message(STATUS "Patching SONAME for ${so_file} - target ${so_patched_target}")
+  
+    add_custom_command(
+        OUTPUT ${so_patched_file}
+        DEPENDS ${so_file}
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/lib"
+        COMMAND ${PATCHELF_EXECUTABLE} --set-soname "${so_filename}" "${so_file}" --output "${so_patched_file}"
+        COMMENT "Patching SONAME for ${so_file}"
+        VERBATIM
+    )
+    add_custom_target(
+        ${so_patched_target}
+        DEPENDS ${so_patched_file}
+    )
+
     add_library(${target_name} SHARED IMPORTED)
     set_target_properties(${target_name} PROPERTIES
-        IMPORTED_LOCATION             "${so_file}"
+        IMPORTED_LOCATION             "${so_patched_file}"
+        IMPORTED_SONAME               "${so_filename}"
         INTERFACE_INCLUDE_DIRECTORIES "${XLA_BAZEL_BIN}"
     )
-    add_dependencies(${target_name} xla_project)
+    add_dependencies(${target_name} ${so_patched_target})
 endfunction()
 
-add_xla_proto_library(XLA::autotuning_proto_cc "${XLA_AUTOTUNING_PROTO_LIB}")
-add_xla_proto_library(XLA::autotune_results_proto_cc "${XLA_AUTOTUNE_RESULTS_PROTO_LIB}")
-add_xla_proto_library(XLA::xla_proto_cc "${XLA_XLA_PROTO_LIB}")
-add_xla_proto_library(XLA::xla_data_proto_cc "${XLA_XLA_DATA_PROTO_LIB}")
-add_xla_proto_library(XLA::xla_service_hlo_proto_cc "${XLA_SERVICE_HLO_PROTO_LIB}")
-add_xla_proto_library(XLA::xla_service_metrics_proto_cc "${XLA_SERVICE_METRICS_PROTO_LIB}")
-add_xla_proto_library(XLA::xla_dnn_proto_cc "${XLA_DNN_PROTO_LIB}")
-add_xla_proto_library(XLA::xla_streaming_executor_device_description_proto_cc "${XLA_STREAM_EXECUTOR_DEVICE_DESCRIPTION_PROTO_LIB}")
-add_xla_proto_library(XLA::xla_streaming_executor_cuda_cuda_device_capability_proto_cc "${XLA_STREAM_EXECUTOR_CUDA_CUDA_DEVICE_CAPABILITY_PROTO_LIB}")
-add_xla_proto_library(XLA::compile_options_proto_cc "${XLA_COMPILE_OPTIONS_PROTO_LIB}")
+add_xla_shared_library(XLA::pjrt_c_api_cpu "${XLA_PJRT_CPU_LIB}")
+add_xla_shared_library(XLA::autotuning_proto_cc "${XLA_AUTOTUNING_PROTO_LIB}")
+add_xla_shared_library(XLA::autotune_results_proto_cc "${XLA_AUTOTUNE_RESULTS_PROTO_LIB}")
+add_xla_shared_library(XLA::xla_proto_cc "${XLA_XLA_PROTO_LIB}")
+add_xla_shared_library(XLA::xla_data_proto_cc "${XLA_XLA_DATA_PROTO_LIB}")
+add_xla_shared_library(XLA::xla_service_hlo_proto_cc "${XLA_SERVICE_HLO_PROTO_LIB}")
+add_xla_shared_library(XLA::xla_service_metrics_proto_cc "${XLA_SERVICE_METRICS_PROTO_LIB}")
+add_xla_shared_library(XLA::xla_dnn_proto_cc "${XLA_DNN_PROTO_LIB}")
+add_xla_shared_library(XLA::xla_streaming_executor_device_description_proto_cc "${XLA_STREAM_EXECUTOR_DEVICE_DESCRIPTION_PROTO_LIB}")
+add_xla_shared_library(XLA::xla_streaming_executor_cuda_cuda_device_capability_proto_cc "${XLA_STREAM_EXECUTOR_CUDA_CUDA_DEVICE_CAPABILITY_PROTO_LIB}")
+add_xla_shared_library(XLA::compile_options_proto_cc "${XLA_COMPILE_OPTIONS_PROTO_LIB}")
 
 add_library(XLA_protos INTERFACE)
 target_link_libraries(XLA_protos

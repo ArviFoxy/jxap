@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     pkg-config \
     ccache \
+    patchelf \
     # For the LLVM script.
     wget \
     lsb-release \

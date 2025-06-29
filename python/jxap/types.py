@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import abc
 from typing import Mapping, Sequence, Protocol, Generic, TypeVar
 
 import equinox as eqx
@@ -25,13 +26,16 @@ class Plugin(Protocol, Generic[PluginState]):
     """Audio plugin with state `PluginState`."""
 
     @property
+    @abc.abstractmethod
     def input_buffer_names(self) -> Sequence[str]:
         """Names of all input buffers."""
 
+    @abc.abstractmethod
     def init(self, inputs: Mapping[str, Buffer],
              sample_rate: Float[Array, ""]) -> PluginState:
         """Initializes the plugin, given the first batch of samples. Called once."""
 
+    @abc.abstractmethod
     def update(
         self,
         state: PluginState,
@@ -50,8 +54,28 @@ class Plugin(Protocol, Generic[PluginState]):
         """
 
 
-class PluginConfig(Protocol):
-    """Configuration for a plugin."""
+class EmptyState(eqx.Module):
+    """Empty plugin state."""
 
-    def make(self) -> Plugin:
-        """Creates a configured plugin."""
+
+class StatelessPlugin(Plugin[EmptyState]):
+    """Plugin with no state."""
+
+    def init(self, inputs: Mapping[str, Buffer],
+             sample_rate: Float[Array, ""]) -> EmptyState:
+        del inputs, sample_rate  # Unused.
+        return EmptyState()
+
+    def update(
+        self,
+        state: EmptyState,
+        inputs: Mapping[str, Buffer],
+        sample_rate: Float[Array, ""],
+    ) -> tuple[EmptyState, Mapping[str, Buffer]]:
+        del state  # Unused.
+        return EmptyState(), self.process(inputs, sample_rate)
+
+    @abc.abstractmethod
+    def process(self, inputs: Mapping[str, Buffer],
+                sample_rate: Float[Array, ""]) -> Mapping[str, Buffer]:
+        """Processes a frame of audio data."""

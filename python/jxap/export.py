@@ -74,8 +74,10 @@ class PackagedPlugin:
     input_buffer_names: Sequence[str]
     output_buffer_names: Sequence[str]
 
-    def save(self, file_path) -> None:
+    def save(self, file_path: str) -> None:
         """Saves the plugin to a JXAP plugin file (zip)."""
+        # `makedirs(dirname)` can fail for relative paths.
+        file_path = os.path.abspath(file_path)
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with zipfile.ZipFile(file_path, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             zip_file.writestr("name.txt", self.name)

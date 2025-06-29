@@ -1,5 +1,8 @@
 // Loading plugins from a .jxap ZIP file.
 
+#ifndef JXAP_PACKAGED_PLUGIN
+#define JXAP_PACKAGED_PLUGIN
+
 #include <string>
 #include <vector>
 
@@ -20,3 +23,5 @@ class PackagedPlugin {
 absl::StatusOr<PackagedPlugin> LoadPackagedPlugin(const std::string& path);
 
 }  // namespace jxap
+
+#endif  // JXAP_PACKAGED_PLUGIN

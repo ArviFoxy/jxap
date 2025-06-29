@@ -60,8 +60,19 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE) # Needed on Windows, harmless elsewhere
 FetchContent_MakeAvailable(googletest)
 
-# Protocol buffers
-find_package(Protobuf REQUIRED)
+# Protocol buffers as a static library.
+FetchContent_Declare(
+  protobuf
+  GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
+  GIT_TAG        v31.1
+)
+set(protobuf_INSTALL OFF)
+set(protobuf_BUILD_TESTS OFF)
+set(protobuf_ALLOW_CCACHE ON)
+set(protobuf_BUILD_EXAMPLES OFF)
+set(protobuf_BUILD_SHARED_LIBS OFF)
+set(protobuf_WITH_UTF8_VALIDATION OFF)
+FetchContent_MakeAvailable(protobuf)
 
 include(StableHLO.cmake)
 include(XLA.cmake)

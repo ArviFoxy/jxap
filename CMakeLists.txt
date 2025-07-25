@@ -1,4 +1,5 @@
-cmake_minimum_required(VERSION 3.15)
+# 3.21 for IMPORTED_RUNTIME_ARTIFACTS
+cmake_minimum_required(VERSION 3.21)
 
 project(JaxAudioPlugins LANGUAGES C CXX)
 
@@ -21,9 +22,9 @@ set(CMAKE_C_EXTENSIONS OFF)
 # Enable generation of compile_commands.json for tooling
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Disable RRTI to match LLVM
-set(NO_RTTI "-fno-rtti")
-add_definitions(${NO_RTTI})
+# Consistently enable RTTI
+set(WITH_RTTI "-frtti")
+add_definitions(${WITH_RTTI})
 
 # --- Enable CCACHE --- 
 find_program(CCACHE_EXECUTABLE ccache)
@@ -64,7 +65,7 @@ FetchContent_MakeAvailable(googletest)
 FetchContent_Declare(
   protobuf
   GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
-  GIT_TAG        v31.1
+  GIT_TAG        v21.9
 )
 set(protobuf_INSTALL OFF)
 set(protobuf_BUILD_TESTS OFF)
@@ -72,6 +73,7 @@ set(protobuf_ALLOW_CCACHE ON)
 set(protobuf_BUILD_EXAMPLES OFF)
 set(protobuf_BUILD_SHARED_LIBS OFF)
 set(protobuf_WITH_UTF8_VALIDATION OFF)
+set(protobuf_DISABLE_RTTI OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(protobuf)
 
 include(StableHLO.cmake)
@@ -155,18 +157,19 @@ target_link_libraries(jxap_pjrt_plugin_runner
 llvm_update_compile_flags(jxap_pjrt_plugin_runner)
 mlir_check_all_link_libraries(jxap_pjrt_plugin_runner)
 
-#message(STATUS "Building pipewire runner")
-#add_executable(jxap_pipewire_run
-#    jxap/pipewire_run.cc)
-#target_link_libraries(jxap_pipewire_run
-#    PRIVATE
-#    absl::strings
-#    absl::log
-#    absl::flags
-#    jxap_pjrt_plugin_runner
-#    PkgConfig::PIPEWIRE
-#)
-#llvm_update_compile_flags(jxap_pipewire_run)
+message(STATUS "Building pipewire runner")
+add_executable(jxap_pipewire_run
+    jxap/pipewire_run.cc)
+target_link_libraries(jxap_pipewire_run
+    PRIVATE
+    absl::strings
+    absl::log
+    absl::flags
+    absl::flags_parse
+    jxap_pjrt_plugin_runner
+    PkgConfig::PIPEWIRE
+)
+llvm_update_compile_flags(jxap_pipewire_run)
 
 # --- Testing ---
 message(STATUS "Building tests [working dir ${CMAKE_CURRENT_BINARY_DIR}]")
@@ -195,5 +198,12 @@ gtest_discover_tests(jxap_pjrt_plugin_runner_tests
 )
 
 # --- Installation ---
+
+install(TARGETS jxap_pipewire_run
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+set_target_properties(jxap_pipewire_run PROPERTIES
+    INSTALL_RPATH "$ORIGIN/../lib"
+)
 
 message(STATUS "Configuration complete. Build type: ${CMAKE_BUILD_TYPE}")

@@ -24,6 +24,8 @@ set(LLVM_INCLUDE_TESTS OFF CACHE BOOL "Exclude LLVM/MLIR tests")
 set(MLIR_INCLUDE_TESTS OFF CACHE BOOL "Exclude MLIR tests")
 set(LLVM_USE_SPLIT_DWARF ON CACHE BOOL "Enable split DWARF for debug info")
 set(LLVM_ENABLE_ASSERTIONS OFF CACHE BOOL "Enable LLVM assertions")
+# Make sure RTTI is consistently on.
+set(LLVM_ENABLE_RTTI ON CACHE BOOL "Enable RTTI" FORCE)
 
 # By default, FetchContent_MakeAvailable builds in CMAKE_BINARY_DIR/_deps/llvm_project-build
 # And the LLVM/MLIR CMake system will make its targets and CMake functions available to our project.

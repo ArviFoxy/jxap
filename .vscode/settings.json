@@ -54,6 +54,9 @@
     "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", // Generate compile_commands.json for better IntelliSense
     "-DCMAKE_BUILD_TYPE=Debug" // Default to Debug build type
   ],
+  "cmake.configureSettings": {
+    "CMAKE_INSTALL_PREFIX": "${workspaceFolder}/install"
+  },
   "cmake.ctestArgs": [
     "--verbose"
   ],

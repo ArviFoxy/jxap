@@ -125,3 +125,20 @@ target_link_libraries(XLA_protos
     "-Wl,--end-group"
     protobuf::libprotobuf
 )
+
+# Installation
+
+install(IMPORTED_RUNTIME_ARTIFACTS 
+    XLA::pjrt_c_api_cpu
+    XLA::autotuning_proto_cc
+    XLA::autotune_results_proto_cc
+    XLA::xla_proto_cc
+    XLA::xla_data_proto_cc
+    XLA::xla_service_hlo_proto_cc
+    XLA::xla_service_metrics_proto_cc
+    XLA::xla_dnn_proto_cc
+    XLA::xla_streaming_executor_device_description_proto_cc
+    XLA::xla_streaming_executor_cuda_cuda_device_capability_proto_cc
+    XLA::compile_options_proto_cc
+    LIBRARY DESTINATION lib
+)

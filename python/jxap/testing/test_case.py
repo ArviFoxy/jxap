@@ -1,4 +1,4 @@
-"""Test utilities."""
+"""Test case base class."""
 import sys
 
 from absl import flags

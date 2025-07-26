@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import equinox as eqx
 from jxap import types
 from jxap import export
-from jxap import test_utils
+from jxap import testing
 
 FLAGS = flags.FLAGS
 
@@ -44,7 +44,7 @@ class TestPlugin(types.Plugin[TestPluginState]):
         return new_state, {"output": y}
 
 
-class ExportingTest(test_utils.TestCase):
+class ExportingTest(testing.TestCase):
 
     def test_export_plugin(self):
         plugin_config = TestPlugin()

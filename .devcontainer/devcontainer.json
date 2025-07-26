@@ -8,10 +8,6 @@
     "dockerfile": "Dockerfile",
     "context": ".."
   },
-  // Features to add to the dev container. More info: https://containers.dev/features.
-  // "features": {},
-  // Use 'forwardPorts' to make a list of ports inside the container available locally.
-  // "forwardPorts": [],
   // Use 'postCreateCommand' to run commands after the container is created.
   "postCreateCommand": "pip install --upgrade pip && pip install -r python/requirements.txt && bazel --version && sudo chown -R vscode:vscode /home/vscode/.cache/bazel",
   // Configure tool-specific properties.
@@ -19,16 +15,19 @@
     // Configure properties specific to VS Code.
     "vscode": {
       "settings": {
-        // Link C++ code to the C++ standard
+        // C++ settings
         "C_Cpp.default.cppStandard": "c++17",
         "C_Cpp.default.cStandard": "c11",
+        // Python settings
         "python.defaultInterpreterPath": "/workspaces/.venv/bin/python3",
         "python.linting.pylintEnabled": true,
         "python.formatting.provider": "yapf",
+        // General editor settings
         "editor.tabSize": 2,
         "editor.insertSpaces": true,
         "editor.detectIndentation": false,
         "editor.formatOnSave": true,
+        "editor.formatOnType": false,
         "[python]": {
           "editor.defaultFormatter": "eeyore.yapf"
         },

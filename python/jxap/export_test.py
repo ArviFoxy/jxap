@@ -1,6 +1,5 @@
 """Tests for plugin exporting."""
 
-import dataclasses
 import os
 
 from absl import flags
@@ -8,7 +7,6 @@ from absl.testing import absltest
 import jax
 import jax.numpy as jnp
 
-import equinox as eqx
 from jxap import types
 from jxap import export
 from jxap import testing
@@ -16,40 +14,42 @@ from jxap import testing
 FLAGS = flags.FLAGS
 
 
-class TestPluginState(eqx.Module):
-    last_sample: jax.Array
-    last_buffer: jax.Array
+class TestPlugin(types.Plugin):
 
+    input: types.InputPort = types.InputPort("input")
+    output: types.OutputPort = types.OutputPort("output")
 
-@dataclasses.dataclass()
-class TestPlugin(types.Plugin[TestPluginState]):
+    last_sample: types.State[jax.Array]
+    last_buffer: types.State[jax.Array]
 
-    @property
-    def input_buffer_names(self):
-        return ["input"]
-
-    def init(self, inputs: dict[str, types.Buffer],
-             sample_rate) -> TestPluginState:
+    def init(self, inputs: dict[types.InputPort, types.Buffer], sample_rate):
         del sample_rate  # Unused.
-        return TestPluginState(last_sample=jnp.array(0.0),
-                               last_buffer=jnp.zeros_like(inputs["input"]))
+        self.last_sample = types.State(0.0)
+        self.last_buffer = types.State(jnp.zeros_like(inputs[self.input]))
 
-    def update(self, state: TestPluginState, inputs: dict[str, types.Buffer],
-               sample_rate):
+    def process(self, inputs: dict[types.InputPort, types.Buffer],
+                sample_rate) -> dict[types.OutputPort, types.Buffer]:
         del sample_rate  # Unused.
-        x = inputs["input"]
-        x_1 = jnp.concatenate([state.last_sample[jnp.newaxis], x[:-1]], axis=0)
-        y = x + x_1 + state.last_buffer
-        new_state = TestPluginState(last_sample=x[-1], last_buffer=x)
-        return new_state, {"output": y}
+        x = inputs[self.input]
+        x_1 = jnp.concatenate([self.last_sample.value[jnp.newaxis], x[:-1]],
+                              axis=0)
+        y = x + x_1 + self.last_buffer.value
+        self.last_sample.value = x[-1]
+        self.last_buffer.value = x
+        return {self.output: y}
 
 
 class ExportingTest(testing.TestCase):
 
     def test_export_plugin(self):
-        plugin_config = TestPlugin()
+        plugin = TestPlugin()
+        print(plugin)
+        print(jax.tree.structure(plugin))
+        print(plugin.input_ports)
+        print(plugin.output_ports)
+        print(jax.tree.flatten(plugin))
         path = os.path.join(absltest.TEST_TMPDIR.value, "test_plugin.jxap")
-        export.export_plugin(plugin_config).save(path)
+        export.export_plugin(plugin).save(path)
 
 
 if __name__ == '__main__':

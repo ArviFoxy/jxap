@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import abc
-from typing import Mapping, Sequence, Protocol, Generic, TypeVar
+from typing import Any, Mapping, TypeVar
 
-import equinox as eqx
+import jax
 from jaxtyping import Array, Float
+from flax import nnx
 
 # Audio buffer type.
 # Samples are ordered so that:
@@ -16,32 +17,62 @@ from jaxtyping import Array, Float
 Buffer = Float[Array, "BufferSize"]
 
 # Re-exported for convenience.
-Module = eqx.Module
-
-# Type of the plugin state.
-PluginState = TypeVar("PluginState", bound=Module)
+Module = nnx.Module
 
 
-class Plugin(Protocol, Generic[PluginState]):
-    """Audio plugin with state `PluginState`."""
+@jax.tree_util.register_static
+class InputPort(str):
+    """Defines an input port (stream) of a plugin."""
+
+
+@jax.tree_util.register_static
+class OutputPort(str):
+    """Defines an output port (stream) of a plugin."""
+
+
+_PortType = TypeVar("PortType")
+
+
+def _find_ports(obj: Any, cls: type[_PortType]) -> list[_PortType]:
+    ports = set()
+    # Look at class attributes
+    for value in vars(type(obj)).values():
+        if isinstance(value, cls):
+            ports.add(value)
+    # Look at instance attributes
+    for value in vars(obj).values():
+        if isinstance(value, cls):
+            ports.add(value)
+    return sorted(ports)
+
+
+class State(nnx.Variable[nnx.A]):
+    """Audio plugin state."""
+
+
+class Plugin(nnx.Module):
+    """Audio plugin. Plugins can be stateful using `State` and the `nnx` library."""
 
     @property
-    @abc.abstractmethod
-    def input_buffer_names(self) -> Sequence[str]:
-        """Names of all input buffers."""
+    def input_ports(self) -> list[InputPort]:
+        return _find_ports(self, InputPort)
 
-    @abc.abstractmethod
-    def init(self, inputs: Mapping[str, Buffer],
-             sample_rate: Float[Array, ""]) -> PluginState:
+    @property
+    def output_ports(self) -> list[OutputPort]:
+        return _find_ports(self, OutputPort)
+
+    def init(self, inputs: Mapping[InputPort, Buffer], sample_rate: Float[Array,
+                                                                          ""]):
         """Initializes the plugin, given the first batch of samples. Called once."""
+        del inputs, sample_rate  # Unused.
+        # Does nothing by default.
 
     @abc.abstractmethod
-    def update(
+    def process(
         self,
-        state: PluginState,
-        inputs: Mapping[str, Buffer],
+        inputs: Mapping[InputPort, Buffer],
         sample_rate: Float[Array, ""],
-    ) -> tuple[PluginState, Mapping[str, Buffer]]:
+    ) -> Mapping[OutputPort, Buffer]:
         """Processes a frame of audio data.
 
         Args:
@@ -52,38 +83,3 @@ class Plugin(Protocol, Generic[PluginState]):
         Returns:
           New state and output buffers.
         """
-
-
-class EmptyState(eqx.Module):
-    """Empty plugin state."""
-
-
-class StatelessPlugin(Plugin[EmptyState]):
-    """Plugin with no state."""
-
-    def init(self, inputs: Mapping[str, Buffer],
-             sample_rate: Float[Array, ""]) -> EmptyState:
-        del inputs, sample_rate  # Unused.
-        return EmptyState()
-
-    def update(
-        self,
-        state: EmptyState,
-        inputs: Mapping[str, Buffer],
-        sample_rate: Float[Array, ""],
-    ) -> tuple[EmptyState, Mapping[str, Buffer]]:
-        del state  # Unused.
-        return EmptyState(), self.process(inputs, sample_rate)
-
-    @abc.abstractmethod
-    def process(self, inputs: Mapping[str, Buffer],
-                sample_rate: Float[Array, ""]) -> Mapping[str, Buffer]:
-        """Processes a frame of audio data.
-
-        Args:
-          inputs: Input buffers.
-          sample_rate: Sample rate [Hz], i.e. 1/44100 Hz.
-
-        Returns:
-          Output buffers.
-          """

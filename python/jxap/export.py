@@ -11,6 +11,7 @@ import jax.core as jcore
 import jax.tree_util as jtu
 import jax.export
 from jaxtyping import PyTree
+from flax import nnx
 import numpy as np
 
 from jxap import types
@@ -38,7 +39,7 @@ def _make_scope(dtype: np.dtype = np.float32):
 
 def _get_init_args_shape(plugin: types.Plugin, scope: _Scope):
     buffer_shapes = {}
-    for input_name in plugin.input_buffer_names:
+    for input_name in plugin.input_ports:
         buffer_shapes[input_name] = jax.ShapeDtypeStruct((scope.buffer_size,),
                                                          scope.dtype)
     sample_rate_shape = jax.ShapeDtypeStruct((), scope.dtype)
@@ -49,17 +50,17 @@ def _get_update_args_shape(
     plugin: types.Plugin,
     state_shape: PyTree[jax.ShapeDtypeStruct],
     scope: _Scope,
-) -> tuple[jax.export.SymbolicScope, Any]:
+) -> PyTree[jax.ShapeDtypeStruct]:
     buffer_shapes = {}
-    for input_name in plugin.input_buffer_names:
+    for input_name in plugin.input_ports:
         buffer_shapes[input_name] = jax.ShapeDtypeStruct((scope.buffer_size,),
                                                          scope.dtype)
     sample_rate_shape = jax.ShapeDtypeStruct((), scope.dtype)
     return state_shape, buffer_shapes, sample_rate_shape
 
 
-class _TreeDefClosure:
-    tree_def: Any | None = None
+class _Closure:
+    value: Any | None = None
 
 
 @dataclasses.dataclass(slots=True, frozen=True)
@@ -134,12 +135,16 @@ def export_plugin(plugin: types.Plugin,
     logging.info("Exporting plugin %s:", name)
     scope = _make_scope(dtype)
 
-    state_tree_def = _TreeDefClosure()
+    initialized_graphdef = _Closure()
+    graphdef, empty_state, static = nnx.split(plugin, types.State, ...)
 
     def _init_fn(buffers, sample_rate):
-        state, tree_def = jax.tree.flatten(plugin.init(buffers, sample_rate))
-        state_tree_def.tree_def = tree_def
-        return state
+        runtime_plugin = nnx.merge(graphdef, empty_state, static)
+        runtime_plugin.init(buffers, sample_rate)
+        init_graphdef, init_state, _ = nnx.split(runtime_plugin, types.State,
+                                                 ...)
+        initialized_graphdef.value = init_graphdef
+        return init_state
 
     init_args_shape = _get_init_args_shape(plugin, scope=scope)
     exported_init_fn = jax.export.export(jax.jit(_init_fn),
@@ -150,9 +155,11 @@ def export_plugin(plugin: types.Plugin,
     logging.info("  init outputs: %s", exported_init_fn.out_avals)
 
     def _update_fn(state, buffers, sample_rate):
-        state = jax.tree.unflatten(state_tree_def.tree_def, state)
-        new_state, outputs = plugin.update(state, buffers, sample_rate)
-        new_state, _ = jax.tree.flatten(new_state)
+        state_pytree = jax.tree.unflatten(exported_init_fn.out_tree, state)
+        runtime_plugin = nnx.merge(initialized_graphdef.value, state_pytree,
+                                   static)
+        outputs = runtime_plugin.process(buffers, sample_rate)
+        _, new_state, _ = nnx.split(runtime_plugin, types.State, ...)
         return new_state, outputs
 
     state_shape = exported_init_fn.out_avals
@@ -170,13 +177,20 @@ def export_plugin(plugin: types.Plugin,
     _check_plugin_output_update_shape(update_out_tree, dtype, scope.buffer_size)
 
     output_buffer_names = list(update_out_tree[1].keys())
-    logging.info('  input buffer names: %s', plugin.input_buffer_names)
+    logging.info('  input buffer names: %s', plugin.input_ports)
     logging.info('  output buffer names: %s', output_buffer_names)
+
+    output_ports = plugin.output_ports
+    for output_buffer_name in output_buffer_names:
+        if output_buffer_name not in output_ports:
+            raise ValueError(
+                f"Plugin outputs a buffer for a port defined outside the plugin: {output_buffer_name}"
+            )
 
     return PackagedPlugin(
         name=name,
         init_mlir=exported_init_fn.mlir_module(),
         update_mlir=exported_update_fn.mlir_module(),
-        input_buffer_names=plugin.input_buffer_names,
+        input_buffer_names=plugin.input_ports,
         output_buffer_names=output_buffer_names,
     )

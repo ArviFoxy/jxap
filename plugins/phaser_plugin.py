@@ -8,13 +8,7 @@ from jaxtyping import Array, Float
 import jxap
 
 
-class PhaserState(jxap.Module):
-    """State for the phaser, holding the last input and output samples."""
-    last_input: Float[Array, ""]
-    last_output: Float[Array, ""]
-
-
-class PhaserPlugin(jxap.Plugin[PhaserState]):
+class PhaserPlugin(jxap.Plugin):
     """A simple all-pass filter to create a phase shift effect."""
 
     # The center frequency of the filter in Hz. This controls the filter's response.
@@ -22,24 +16,24 @@ class PhaserPlugin(jxap.Plugin[PhaserState]):
 
     # Names of the input and output buffers. These will correspond to Pipewire
     # port names. All ports are single channel but there can be any number of ports.
-    input_name: str = "input"
-    output_name: str = "output"
+    input = jxap.InputPort("input")
+    output = jxap.OutputPort("output")
 
-    @property
-    def input_buffer_names(self):
-        return [self.input_name]
+    # State of the audio filter. Variables that change are wrapped with "jxap.State".
+    last_input: jxap.State[jax.Array]
+    last_output: jxap.State[jax.Array]
 
-    def init(self, inputs: dict[str, jxap.Buffer],
-             sample_rate: Float[Array, ""]) -> PhaserState:
+    def init(self, inputs, sample_rate):
         """Initializes the filter's state with silence."""
         del inputs, sample_rate  # Unused.
-        return PhaserState(last_input=jnp.array(0.0),
-                           last_output=jnp.array(0.0))
+        self.last_input = jxap.State(0.0)
+        self.last_output = jxap.State(0.0)
 
-    def update(
-        self, state: PhaserState, inputs: dict[str, jxap.Buffer],
-        sample_rate: Float[Array, ""]
-    ) -> tuple[PhaserState, dict[str, jxap.Buffer]]:
+    def process(
+        self,
+        inputs: dict[jxap.InputPort, jxap.Buffer],
+        sample_rate: Float[Array, ""],
+    ) -> dict[jxap.OutputPort, jxap.Buffer]:
         """Processes one buffer of audio. All samples are float32."""
         # Calculate the filter coefficient 'alpha' from the desired center frequency.
         # This makes the filter's effect consistent across different sample rates.
@@ -54,21 +48,19 @@ class PhaserPlugin(jxap.Plugin[PhaserState]):
             return (x_n, y_n), y_n
 
         # `jxap.Buffer` is just an alias for a Jax array with one dimension.
-        input_buffer: Float[Array, "BufferSize"] = inputs[self.input_name]
+        input_buffer: Float[Array, "BufferSize"] = inputs[self.input]
 
         # Use jax.lax.scan for efficient vectorized processing of the filter.
-        initial_state = (state.last_input, state.last_output)
+        initial_state = (self.last_input.value, self.last_output.value)
         (final_input, final_output), output_buffer = jax.lax.scan(
             allpass_step,
             initial_state,
             input_buffer,
         )
-
-        # The final samples become the state for the next buffer.
-        new_state = PhaserState(last_input=final_input,
-                                last_output=final_output)
-
-        return new_state, {self.output_name: output_buffer}
+        # Update the plugin's state.
+        self.last_input.value = final_input
+        self.last_output.value = final_output
+        return {self.output: output_buffer}
 
 
 # --- Exporting Logic ---

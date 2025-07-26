@@ -20,7 +20,7 @@ The goal is to combine the ease of Python while delivering performance comparabl
 
 The architecture separates the plugin logic (Python) from the real-time audio engine (C++).
 
-1. **Plugin Definition (Python)**: You define a plugin by creating a class that inherits from jxap.Plugin and implements init and update methods. The DSP logic is written using JAX for array manipulation and Equinox for state management.  
+1. **Plugin Definition (Python)**: You define a plugin by creating a class that inherits from jxap.Plugin and implements init and process methods. The DSP logic is written using JAX for array manipulation and flax NNX for state management.  
 2. **Exporting (Python to MLIR)**: A Python script (export.py) uses jax.export to trace the JAX functions and convert them into MLIR in the StableHLO dialect. This, along with metadata, is packaged into a .jxap file (a zip archive).  
 3. **Loading and Compilation (C++)**: The C++ runtime loads the .jxap file and uses an MLIR pipeline to refine the dynamic shapes into static ones suitable for real-time processing.  
 4. **Execution (C++ and PJRT)**: The refined MLIR is compiled into native machine code using the XLA PJRT (Plugin-based Runtime) C API, creating a high-performance, JIT-compiled version of the plugin.  
@@ -32,11 +32,12 @@ This example demonstrates the end-to-end workflow with a simple phase-shifting p
 
 ### **1\. The Plugin Code**
 
-This plugin uses a first-order all-pass filter to shift the phase of the incoming audio signal. Unlike a simple gain effect, this filter needs to remember the last input and output sample, making it a "stateful" plugin. The file also includes a main function that exports the packaged plugin.
+This plugin uses a first-order all-pass filter to shift the phase of the incoming audio signal. This filter needs to remember the last input and output sample - stateful variables are marked by `jxap.State` which is a kind of `nnx.Varaible`. The file also includes a main function that exports the packaged plugin. Under the hood the stateful updates are transformed into a pure functional form before being exported.
 
 `plugins/phaser\_plugin.py`:
 
 ```python
+
 from absl import app
 from absl import flags
 import jax
@@ -45,38 +46,32 @@ from jaxtyping import Array, Float
 import jxap
 
 
-class PhaserState(jxap.Module):
-    """State for the phaser, holding the last input and output samples."""
-    last_input: Float[Array, ""]
-    last_output: Float[Array, ""]
-
-
-class PhaserPlugin(jxap.Plugin[PhaserState]):
+class PhaserPlugin(jxap.Plugin):
     """A simple all-pass filter to create a phase shift effect."""
 
     # The center frequency of the filter in Hz. This controls the filter's response.
-    center_freq_hz: float
+    center_freq_hz: float = 440.0
 
     # Names of the input and output buffers. These will correspond to Pipewire
     # port names. All ports are single channel but there can be any number of ports.
-    input_name: str = "input"
-    output_name: str = "output"
+    input = jxap.InputPort("input")
+    output = jxap.OutputPort("output")
 
-    @property
-    def input_buffer_names(self):
-        return [self.input_name]
+    # State of the audio filter. Variables that change are wrapped with "jxap.State".
+    last_input: jxap.State[jax.Array]
+    last_output: jxap.State[jax.Array]
 
-    def init(self, inputs: dict[str, jxap.Buffer],
-             sample_rate: Float[Array, ""]) -> PhaserState:
+    def init(self, inputs, sample_rate):
         """Initializes the filter's state with silence."""
         del inputs, sample_rate  # Unused.
-        return PhaserState(last_input=jnp.array(0.0),
-                           last_output=jnp.array(0.0))
+        self.last_input = jxap.State(0.0)
+        self.last_output = jxap.State(0.0)
 
-    def update(
-        self, state: PhaserState, inputs: dict[str, jxap.Buffer],
-        sample_rate: Float[Array, ""]
-    ) -> tuple[PhaserState, dict[str, jxap.Buffer]]:
+    def process(
+        self,
+        inputs: dict[jxap.InputPort, jxap.Buffer],
+        sample_rate: Float[Array, ""],
+    ) -> dict[jxap.OutputPort, jxap.Buffer]:
         """Processes one buffer of audio. All samples are float32."""
         # Calculate the filter coefficient 'alpha' from the desired center frequency.
         # This makes the filter's effect consistent across different sample rates.
@@ -91,21 +86,19 @@ class PhaserPlugin(jxap.Plugin[PhaserState]):
             return (x_n, y_n), y_n
 
         # `jxap.Buffer` is just an alias for a Jax array with one dimension.
-        input_buffer: Float[Array, "BufferSize"] = inputs[self.input_name]
+        input_buffer: Float[Array, "BufferSize"] = inputs[self.input]
 
         # Use jax.lax.scan for efficient vectorized processing of the filter.
-        initial_state = (state.last_input, state.last_output)
+        initial_state = (self.last_input.value, self.last_output.value)
         (final_input, final_output), output_buffer = jax.lax.scan(
             allpass_step,
             initial_state,
             input_buffer,
         )
-
-        # The final samples become the state for the next buffer.
-        new_state = PhaserState(last_input=final_input,
-                                last_output=final_output)
-
-        return new_state, {self.output_name: output_buffer}
+        # Update the plugin's state.
+        self.last_input.value = final_input
+        self.last_output.value = final_output
+        return {self.output: output_buffer}
 
 
 # --- Exporting Logic ---
@@ -114,8 +107,7 @@ _OUTPUT_PATH = flags.DEFINE_string("output_path", "plugins/phaser_plugin.jxap",
 
 
 def main(_):
-    # Here we create a plugin instance with specific parameters and export it.
-    plugin = PhaserPlugin(center_frequency_hz=440.0)
+    plugin = PhaserPlugin()
     jxap.export.export_plugin(plugin).save(_OUTPUT_PATH.value)
     print(f"Saved plugin to {_OUTPUT_PATH.value}")
 

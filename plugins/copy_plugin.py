@@ -9,20 +9,15 @@ _OUTPUT_PATH = flags.DEFINE_string("output_path", "plugins/copy_plugin.jxap",
                                    "Where to write the plugin.")
 
 
-class CopyPlugin(jxap.StatelessPlugin):
+class CopyPlugin(jxap.Plugin):
     """Copies an audio stream."""
 
-    input_name: str = "input"
-    output_name: str = "output"
+    input = jxap.InputPort("input")
+    output = jxap.OutputPort("output")
 
-    @property
-    def input_buffer_names(self):
-        return [self.input_name]
-
-    def process(self, inputs: dict[str, jxap.Buffer],
-                sample_rate: jxap.Float[jxap.Array, ""]):
+    def process(self, inputs, sample_rate):
         del sample_rate  # Unused.
-        return {self.output_name: inputs[self.input_name]}
+        return {self.output: inputs[self.input]}
 
 
 def main(_):

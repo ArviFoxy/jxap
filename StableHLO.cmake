@@ -9,10 +9,11 @@ FetchContent_Declare(
 )
 
 # LLVM/MLIR specific options (taken from build_mlir.sh)
-set(LLVM_INSTALL_UTILS ON CACHE BOOL "Install LLVM utilities")
+set(LLVM_INSTALL_UTILS OFF CACHE BOOL "Install LLVM utilities" FORCE)
+set(LLVM_INSTALL_TOOLCHAIN_ONLY ON CACHE BOOL "Install only toolchain files" FORCE)
 set(LLVM_ENABLE_LLD OFF CACHE BOOL "Enable LLD linker" FORCE)
 set(LLVM_ENABLE_PROJECTS "mlir" CACHE STRING "Build MLIR")
-set(LLVM_TARGETS_TO_BUILD "host" CACHE STRING "LLVM targets to build")
+set(LLVM_TARGETS_TO_BUILD "host X86" CACHE STRING "LLVM targets to build")
 set(LLVM_ENABLE_TERMINFO OFF CACHE BOOL "Disable terminfo")
 set(LLVM_INCLUDE_TOOLS ON CACHE BOOL "Include LLVM tools")
 set(MLIR_ENABLE_BINDINGS_PYTHON OFF CACHE BOOL "Disable MLIR Python bindings")

@@ -1,5 +1,5 @@
-#ifndef JXAP_STABLEHLO_PASSES
-#define JXAP_STABLEHLO_PASSES
+#ifndef JXAP_MLIR_MLIR_PIPELINE_H
+#define JXAP_MLIR_MLIR_PIPELINE_H
 
 #include <map>
 #include <string>
@@ -7,7 +7,10 @@
 
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "jxap/mlir_passes.h"
+#include "jxap/mlir/passes.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/OwningOpRef.h"
 
 namespace jxap {
 
@@ -50,4 +53,4 @@ absl::StatusOr<std::string> MlirPipeline(
 
 }  // namespace jxap
 
-#endif
+#endif  // JXAP_MLIR_MLIR_PIPELINE_H

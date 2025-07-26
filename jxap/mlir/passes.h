@@ -1,3 +1,6 @@
+#ifndef JXAP_MLIR_MLIR_PASSES_H
+#define JXAP_MLIR_MLIR_PASSES_H
+
 #include <map>
 #include <memory>
 #include <string>
@@ -18,3 +21,5 @@ std::unique_ptr<::mlir::Pass> createReplaceGlobalConstantsPass(
 std::unique_ptr<::mlir::Pass> createRemoveShapeAssertionsPass();
 
 }  // namespace jxap
+
+#endif  // JXAP_MLIR_MLIR_PASSES_H

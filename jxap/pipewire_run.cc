@@ -3,6 +3,8 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/flags/flag.h>
 #include <absl/flags/parse.h>
+#include <absl/flags/usage.h>
+#include <absl/log/initialize.h>
 #include <absl/log/log.h>
 #include <errno.h>
 #include <math.h>
@@ -96,7 +98,9 @@ void do_quit(void *user_data, int signal_number) {
 }  // namespace
 
 int main(int argc, char *argv[]) {
+  absl::SetProgramUsageMessage("Runs a JXAP plugin as a pipewire filter.");
   std::vector<char *> remaining_flags = absl::ParseCommandLine(argc, argv);
+  absl::InitializeLog();
   int new_argc = remaining_flags.size();
   char **new_argv = remaining_flags.data();
   pw_init(&new_argc, &new_argv);

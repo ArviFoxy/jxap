@@ -1,4 +1,3 @@
-
 #include "jxap/pjrt_plugin_runner.h"
 
 #include <cstring>  // For strlen
@@ -14,7 +13,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
-#include "jxap/mlir_pipeline.h"
+#include "jxap/mlir/pipeline.h"
 #include "jxap/utils.h"
 #include "xla/pjrt/c/pjrt_c_api.h"
 #include "xla/pjrt/c/pjrt_c_api_cpu.h"

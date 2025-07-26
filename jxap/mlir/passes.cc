@@ -1,4 +1,4 @@
-#include "jxap/mlir_passes.h"
+#include "jxap/mlir/passes.h"
 
 #include "absl/log/log.h"
 #include "llvm/Support/raw_ostream.h"

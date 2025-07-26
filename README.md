@@ -34,7 +34,7 @@ This example demonstrates the end-to-end workflow with a simple phase-shifting p
 
 This plugin uses a first-order all-pass filter to shift the phase of the incoming audio signal. This filter needs to remember the last input and output sample - stateful variables are marked by `jxap.State` which is a kind of `nnx.Varaible`. The file also includes a main function that exports the packaged plugin. Under the hood the stateful updates are transformed into a pure functional form before being exported.
 
-`plugins/phaser\_plugin.py`:
+`plugins/phaser plugin.py`:
 
 ```python
 

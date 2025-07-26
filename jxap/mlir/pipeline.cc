@@ -35,18 +35,10 @@ absl::StatusOr<std::string> MlirPipeline(
     absl::string_view mlir_code, const std::vector<ArgumentTransform>& transforms,
     const std::map<std::string, ScalarValue>& global_constants) {
   mlir::MLIRContext* context = GetMlirContext();
-
-  // TODO: make this some kind of "WithDiagnostics" wrapper function.
-  std::string diagnostic_output;
-  llvm::raw_string_ostream diagnostic_os(diagnostic_output);
-  mlir::ScopedDiagnosticHandler diag_handler(context, [&](mlir::Diagnostic& diag) {
-    diag.print(diagnostic_os);
-    diagnostic_os << "\n";
-    return mlir::failure(diag.getSeverity() == mlir::DiagnosticSeverity::Error);
-  });
+  DiagnosticsHandler diag_handler(context);
 
   auto status_or_module = ParseMlirModule(mlir_code, context);
-  RETURN_IF_ERROR(AddDiagnostics(status_or_module.status(), diagnostic_output));
+  RETURN_IF_ERROR(diag_handler.Annotate(status_or_module.status()));
   mlir::OwningOpRef<mlir::ModuleOp> module = std::move(status_or_module.value());
 
   // Parse the refined types.
@@ -56,8 +48,8 @@ absl::StatusOr<std::string> MlirPipeline(
       const auto& refine_type = std::get<RefineType>(transform);
       mlir::Type parsed_type = mlir::parseType(refine_type.type, context);
       if (!parsed_type) {
-        return absl::InvalidArgumentError(absl::StrCat("Failed to parse type ", refine_type.type,
-                                                       ". Diagnostics:\n", diagnostic_output));
+        return diag_handler.Annotate(
+            absl::InvalidArgumentError(absl::StrCat("Failed to parse type ", refine_type.type)));
       }
       parsed_types.push_back(parsed_type);
     }
@@ -92,8 +84,7 @@ absl::StatusOr<std::string> MlirPipeline(
   pm.addPass(mlir::stablehlo::createStablehloAggressiveSimplificationPass());
 
   if (mlir::failed(pm.run(*module))) {
-    return absl::InternalError(
-        absl::StrCat("Failed to refine input types. Diagnostics:\n", diagnostic_output));
+    return diag_handler.Annotate(absl::InternalError("Failed to refine input types"));
   }
 
   // Print the transformed module back to a string

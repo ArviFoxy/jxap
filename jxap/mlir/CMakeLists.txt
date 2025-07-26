@@ -9,12 +9,11 @@ target_link_libraries(jxap_mlir_utils
     PRIVATE
     LLVMCore
     LLVMSupport
-    LLVMTarget
-    LLVMCodeGen
-    LLVMAsmPrinter
-    LLVMX86CodeGen
-    MLIRTargetLLVMIRExport
-    MLIRExecutionEngine)
+    MLIRIR
+    MLIRFuncDialect
+    MLIRParser
+    StablehloOps
+)
       
 add_library(jxap_mlir_passes STATIC
     passes.h

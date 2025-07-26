@@ -174,6 +174,7 @@ add_test_data_files(
     "jxap/testdata/test_plugin.jxap"
     "jxap/testdata/test_plugin.jxap-init"
     "jxap/testdata/test_plugin.jxap-update"
+    "jxap/testdata/loop_plugin.jxap"
     "jxap/testdata/loop_plugin.jxap-update"
 )
 llvm_update_compile_flags(jxap_tests)

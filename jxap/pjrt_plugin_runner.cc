@@ -18,6 +18,7 @@
 #include "xla/pjrt/c/pjrt_c_api.h"
 #include "xla/pjrt/c/pjrt_c_api_cpu.h"
 #include "xla/pjrt/proto/compile_options.pb.h"
+#include "xla/xla.pb.h"
 
 namespace jxap {
 namespace {
@@ -519,6 +520,33 @@ class PJRTExecutable {
     get_exec_args.loaded_executable = exec->loaded_executable;
     RETURN_IF_PJRT_ERROR(ctx->api->PJRT_LoadedExecutable_GetExecutable(&get_exec_args), ctx->api);
     exec->executable = get_exec_args.executable;
+
+    // Log the optimized program
+    PJRT_Executable_OptimizedProgram_Args optimized_program_args;
+    optimized_program_args.struct_size = PJRT_Executable_OptimizedProgram_Args_STRUCT_SIZE;
+    optimized_program_args.extension_start = nullptr;
+    optimized_program_args.executable = exec->executable;
+    PJRT_Program optimized_program;
+    optimized_program.struct_size = PJRT_Program_STRUCT_SIZE;
+    optimized_program.extension_start = nullptr;
+    optimized_program.code = nullptr;  // Will be filled by the API
+    optimized_program.code_size = 0;
+    optimized_program.format = nullptr;  // Default format
+    optimized_program.format_size = 0;
+    optimized_program_args.program = &optimized_program;
+    // First call to get the size of the optimized program.
+    RETURN_IF_PJRT_ERROR(ctx->api->PJRT_Executable_OptimizedProgram(&optimized_program_args),
+                         ctx->api);
+    // Allocate the buffer for the optimized program code.
+    std::vector<char> optimized_program_code(optimized_program.code_size);
+    optimized_program.code = optimized_program_code.data();
+    // Second call to get the actual optimized program code.
+    RETURN_IF_PJRT_ERROR(ctx->api->PJRT_Executable_OptimizedProgram(&optimized_program_args),
+                         ctx->api);
+    xla::HloModuleProtoWithConfig hlo_module_proto;
+    hlo_module_proto.ParseFromArray(optimized_program.code, optimized_program.code_size);
+    LOG(INFO) << "Optimized PJRT program (format " << optimized_program.format << "):\n"
+              << hlo_module_proto.DebugString();
 
     return exec;
   }

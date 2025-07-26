@@ -14,10 +14,16 @@
 
 namespace jxap {
 
-/**
- * Adds diagnostics to an existing status.
- */
-absl::Status AddDiagnostics(absl::Status status, const std::string& diagnostic_output);
+class DiagnosticsHandler {
+ public:
+  DiagnosticsHandler(mlir::MLIRContext* context);
+  absl::Status Annotate(absl::Status status);
+
+ private:
+  std::string diagnostic_output_;
+  llvm::raw_string_ostream diagnostic_os_;
+  mlir::ScopedDiagnosticHandler diag_handler_;
+};
 
 /**
  * Global MLIR context.
@@ -37,12 +43,6 @@ std::string MlirTensorType(const std::vector<int64_t>& shape, absl::string_view 
  */
 absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> ParseMlirModule(absl::string_view mlir_code,
                                                                   mlir::MLIRContext* context);
-
-/**
- * Lowers and optimizes the MLIR module to LLVM IR. Returns a string containing the LLVM IR.
- * This is for debugging purposes.
- */
-absl::StatusOr<std::string> LowerToOptimizedLLVMIR(mlir::ModuleOp module);
 
 }  // namespace jxap
 

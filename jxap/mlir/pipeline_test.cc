@@ -74,14 +74,7 @@ TEST(MlirPipeline, PipelineTestLoopOpt) {
   ASSERT_TRUE(output.ok()) << output.status();
 
   LOG(INFO) << "MLIR output:\n" << output.value();
-
-  // Lower the MLIR to LLVM IR for debugging.
-  // TODO: move to a tool.
-  auto mlirModule = ParseMlirModule(output.value(), GetMlirContext());
-  ASSERT_TRUE(mlirModule.ok()) << mlirModule.status();
-  auto llvm_ir = LowerToOptimizedLLVMIR(mlirModule.value().get());
-  ASSERT_TRUE(llvm_ir.ok()) << llvm_ir.status();
-  LOG(INFO) << "LLVM IR output:\n" << llvm_ir.value();
+  std::cout << output.value() << std::endl;
 }
 
 }  // namespace

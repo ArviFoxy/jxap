@@ -14,6 +14,7 @@ set(XLA_BAZEL_TARGETS
     "//xla/stream_executor:device_description_proto_cc_impl"
     "//xla/stream_executor/cuda:cuda_compute_capability_proto_cc_impl"
     "//xla/pjrt/proto:compile_options_proto_cc_impl"
+    "//xla/tools:hlo-opt"
 )
 
 set(XLA_PJRT_CPU_LIB "${XLA_BAZEL_BIN}/xla/pjrt/c/pjrt_c_api_cpu_plugin.so")
@@ -27,6 +28,7 @@ set(XLA_DNN_PROTO_LIB "${XLA_BAZEL_BIN}/xla/tsl/protobuf/libdnn_proto_cc_impl.so
 set(XLA_STREAM_EXECUTOR_DEVICE_DESCRIPTION_PROTO_LIB "${XLA_BAZEL_BIN}/xla/stream_executor/libdevice_description_proto_cc_impl.so")
 set(XLA_STREAM_EXECUTOR_CUDA_CUDA_DEVICE_CAPABILITY_PROTO_LIB "${XLA_BAZEL_BIN}/xla/stream_executor/cuda/libcuda_compute_capability_proto_cc_impl.so")
 set(XLA_COMPILE_OPTIONS_PROTO_LIB "${XLA_BAZEL_BIN}/xla/pjrt/proto/libcompile_options_proto_cc_impl.so")
+set(XLA_HLO_OPT_BIN "${XLA_BAZEL_BIN}/xla/tools/hlo-opt")
 
 ExternalProject_Add(xla_project
     GIT_REPOSITORY      https://github.com/openxla/xla.git
@@ -54,6 +56,7 @@ ExternalProject_Add(xla_project
                         "${XLA_STREAM_EXECUTOR_DEVICE_DESCRIPTION_PROTO_LIB}"
                         "${XLA_STREAM_EXECUTOR_CUDA_CUDA_DEVICE_CAPABILITY_PROTO_LIB}"
                         "${XLA_COMPILE_OPTIONS_PROTO_LIB}"
+                        "${XLA_HLO_OPT_BIN}"
 
     INSTALL_COMMAND     ""
 )
@@ -128,6 +131,7 @@ target_link_libraries(XLA_protos
 
 # Installation
 
+install(PROGRAMS "${XLA_HLO_OPT_BIN}" DESTINATION bin)
 install(IMPORTED_RUNTIME_ARTIFACTS 
     XLA::pjrt_c_api_cpu
     XLA::autotuning_proto_cc

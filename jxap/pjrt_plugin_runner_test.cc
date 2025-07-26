@@ -10,6 +10,26 @@ namespace jxap {
 namespace {
 
 const std::string kTestPluginPath = "jxap/testdata/test_plugin.jxap";
+const std::string kLoopPluginPath = "jxap/testdata/loop_plugin.jxap";
+
+TEST(PJRTPluginRunnerTest, CompilesWithLoop) {
+  auto packaged_plugin_or_status = LoadPackagedPlugin(kLoopPluginPath);
+  ASSERT_TRUE(packaged_plugin_or_status.ok()) << packaged_plugin_or_status.status();
+  auto plugin_or_status = PJRTPluginRunner::LoadPlugin(packaged_plugin_or_status.value());
+  ASSERT_TRUE(plugin_or_status.ok()) << plugin_or_status.status();
+
+  int64_t buffer_size = 128;
+  auto compiled_plugin_or_status = plugin_or_status.value()->Compile(
+      /*buffer_size=*/buffer_size,
+      /*sample_rate=*/44100.f);
+  ASSERT_TRUE(compiled_plugin_or_status.ok()) << compiled_plugin_or_status.status();
+
+  auto compiled_plugin = std::move(compiled_plugin_or_status.value());
+  ASSERT_EQ(compiled_plugin->input_buffer_names(), std::vector<std::string>{"input"});
+  ASSERT_EQ(compiled_plugin->output_buffer_names(), std::vector<std::string>{"output"});
+  ASSERT_EQ(compiled_plugin->audio_buffer_size(), buffer_size);
+  ASSERT_EQ(compiled_plugin->sample_rate(), 44100.f);
+}
 
 TEST(PJRTPluginRunnerTest, CompilesAndRunsPlugin) {
   auto packaged_plugin_or_status = LoadPackagedPlugin(kTestPluginPath);

@@ -30,17 +30,23 @@ Moreover with full support for jax it is possible to reuse the same jax code bot
 
 ### Current state
 
+Plan:
 - [x] Plugin Python API (stateful DSL using flax nnx ✅)
 - [x] Plugin export (to StableHLO)
 - [x] Basic MLIR passes (type refinement, constant folding)
 - [x] PJRT JIT runner
 - [ ] Pipewire runner (currently buggy, why is PW like this 😩.. writing llvm compiler passes was easier)
-- [ ] End-to-end tests (sample corruption, safe LUFS levels, etc)
+- [ ] End-to-end safety tests (sample corruption, safe LUFS levels, generating test wavs). As a reusable library to be able to check plugins before running them on real speakers.
 - [ ] Benchmarks (at pluging runner level)
 - [ ] Compilation cache / prewarming
 - [ ] Library of basic filter components
 - [ ] Orbax support for plugin weights
-- [ ] (Maybe) Runtime optimizations (zero-copy, synchronous MLIR runtime)
+
+Possible some day:
+- [ ] Synchronous CPU runtime with IREE
+- [ ] Domain-specific optimization: for example using the DSP MLIR dialect
+- [ ] Benchmarking and optimizing the GPU runtime (if it can provide low enough latency)
+- [ ] Packaging to other formats: LADSPA, DSSI, LV2, VST
 
 ## **Architecture**
 

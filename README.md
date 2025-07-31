@@ -53,9 +53,9 @@ Possible some day:
 The architecture separates the plugin logic (Python) from the real-time audio engine (C++).
 
 1. **Plugin Definition (Python)**: You define a plugin by creating a class that inherits from jxap.Plugin and implements init and process methods. The DSP logic is written using JAX for array manipulation and flax NNX for state management.  
-2. **Exporting (Python to MLIR)**: A Python script (export.py) uses jax.export to trace the JAX functions and convert them into MLIR in the StableHLO dialect. This, along with metadata, is packaged into a .jxap file (a zip archive).  
-3. **Loading and Compilation (C++)**: The C++ runtime loads the .jxap file and uses an MLIR pipeline to refine the dynamic shapes into static ones suitable for real-time processing.  
-4. **Execution (C++ and PJRT)**: The refined MLIR is compiled into native machine code using the XLA PJRT (Plugin-based Runtime) C API, creating a high-performance, JIT-compiled version of the plugin.  
+2. **Exporting (Python to MLIR)**: The Python code uses `jax.export` to trace the JAX functions and convert them into MLIR (StableHLO dialect). This, along with metadata, is packaged into a .jxap file (a zip archive).  
+3. **Loading and Compilation (C++)**: The C++ runtime loads the .jxap file and once graph parameters (sample rate, buffer size, etc.) are known runs an MLIR pipeline to do some optimization (refining dynamic shapes into static, constant folding).  
+4. **Execution (C++ and PJRT)**: The refined MLIR is compiled into native machine code using the XLA PJRT runtime, creating a high-performance, JIT-compiled version of the plugin.  
 5. **Audio I/O (C++)**: A C++ host (jxap\_pipewire\_run) connects to the system's audio server (e.g., PipeWire) to handle real-time audio I/O, feeding buffers to the compiled PJRT executable.
 
 ## **Example: A Simple Phaser Plugin**
@@ -66,7 +66,7 @@ This example demonstrates the end-to-end workflow with a simple phase-shifting p
 
 This plugin uses a first-order all-pass filter to shift the phase of the incoming audio signal. This filter needs to remember the last input and output sample - stateful variables are marked by `jxap.State` which is a kind of `nnx.Varaible`. The file also includes a main function that exports the packaged plugin. Under the hood the stateful updates are transformed into a pure functional form before being exported.
 
-`plugins/phaser plugin.py`:
+`plugins/phaser\ plugin.py`:
 
 ```python
 

@@ -16,6 +16,32 @@ The goal is to combine the ease of Python while delivering performance comparabl
 
 * **Vectorized Programming Model**: JAX achieves its performance by operating on entire arrays at once. This requires writing code in a "vectorized" or "array-oriented" style, which can be a shift for those accustomed to writing explicit loops.
 
+### Motivation 
+
+This project grew out of my DIY audio system, which is curretly a 3.1 wireless setup (using roc-streaming) with a central linux DSP.
+
+The in-room correction is currently done with a parametric eq (aka array of peaking filters). The filter are learned using with gradient descent (jax+optax) based on mic measurements. This apprpach is very flexible and easy to experiment with, but quite inefficient in that it's using 100 band eq per speaker (to make optimization easier).
+
+With 2 sources (TV or music), each with its own eq profile and 4 speakers (so far) we get 800 peaking filters. The current implementation uses pipewire's filter-graph and quite a lot of pipewire nodes (15+) for all the plumbing. This ends up choking on latency, but even worse it becomes very unstable in incomprehensible way once you add all the pipewire nodes (possibly bugs in PW..).
+
+The goal is to reduce all of these PW nodes (filters and plumbing) into a single, self-contained plugin, vectorize the filters, and reduce the complexity of the PW graph. Implementing channel routing in modular and testable Python should be much simpler than a zoo of PW configs.
+
+Moreover with full support for jax it is possible to reuse the same jax code both for optimization and real-time processing. With support for flax nnx neural networks should technically just work. It would be even possible to attempt online learning - by feeding a microphone stream to the plugin and using gradient descent during live processing.
+
+### Current state
+
+- [x] Plugin Python API (stateful DSL using flax nnx ✅)
+- [x] Plugin export (to StableHLO)
+- [x] Basic MLIR passes (type refinement, constant folding)
+- [x] PJRT JIT runner
+- [ ] Pipewire runner (currently buggy, why is PW like this 😩.. writing llvm compiler passes was easier)
+- [ ] End-to-end tests (sample corruption, safe LUFS levels, etc)
+- [ ] Benchmarks (at pluging runner level)
+- [ ] Compilation cache / prewarming
+- [ ] Library of basic filter components
+- [ ] Orbax support for plugin weights
+- [ ] (Maybe) Runtime optimizations (zero-copy, synchronous MLIR runtime)
+
 ## **Architecture**
 
 The architecture separates the plugin logic (Python) from the real-time audio engine (C++).

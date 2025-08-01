@@ -28,6 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # PipeWire development libraries
     libpipewire-0.3-dev \
     libspa-0.2-dev \
+    libdbus-1-dev \
+    libglib2.0-dev \
     # Google Test dependencies (needed if building from source)
     libgtest-dev \
     # flatbuffers for JAX serialization

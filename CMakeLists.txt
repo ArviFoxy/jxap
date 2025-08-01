@@ -38,11 +38,6 @@ endif()
 
 # --- Find Packages ---
 
-# Find PipeWire libraries using pkg-config
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3>=0.3.40)
-pkg_check_modules(SPA REQUIRED IMPORTED_TARGET libspa-0.2)
-
 # Abseil for C++
 FetchContent_Declare(
     abseil-cpp
@@ -89,7 +84,7 @@ set(MZ_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(MZ_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(minizip_ng)
 
-# --- Directories ---
+# --- Include directories ---
 
 message(STATUS "Adding include dir: ${CMAKE_CURRENT_SOURCE_DIR}")
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
@@ -142,20 +137,9 @@ target_link_libraries(jxap_pjrt_plugin_runner
     absl::statusor
 )
 
-message(STATUS "Building pipewire runner")
-add_executable(jxap_pipewire_run
-    jxap/pipewire_run.cc)
-target_link_libraries(jxap_pipewire_run
-    PRIVATE
-    absl::strings
-    absl::log
-    absl::log_initialize
-    absl::flags
-    absl::flags_parse
-    jxap_pjrt_plugin_runner
-    PkgConfig::PIPEWIRE
-)
-llvm_update_compile_flags(jxap_pipewire_run)
+# -- Pipewire ---
+message(STATUS "Building pipewire module")
+add_subdirectory(jxap/pipewire)
 
 # --- Testing ---
 message(STATUS "Building tests [working dir ${CMAKE_CURRENT_BINARY_DIR}]")
@@ -183,15 +167,6 @@ mlir_check_all_link_libraries(jxap_tests)
 include(GoogleTest)
 gtest_discover_tests(jxap_tests
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-)
-
-# --- Installation ---
-
-install(TARGETS jxap_pipewire_run
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
-set_target_properties(jxap_pipewire_run PROPERTIES
-    INSTALL_RPATH "$ORIGIN/../lib"
 )
 
 message(STATUS "Configuration complete. Build type: ${CMAKE_BUILD_TYPE}")

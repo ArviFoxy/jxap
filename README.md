@@ -37,26 +37,17 @@ Plan:
 - [x] PJRT JIT runner
 - [ ] Pipewire runner (currently buggy, why is PW like this 😩.. writing llvm compiler passes was easier)
 - [ ] End-to-end safety tests (sample corruption, safe LUFS levels, generating test wavs). As a reusable library to be able to check plugins before running them on real speakers.
-- [ ] Benchmarks (at pluging runner level)
+- [ ] Benchmarks (at pluging runner level). Is the asynchronous XLA runtime going to be good enough for real-time processing?
 - [ ] Compilation cache / prewarming
 - [ ] Library of basic filter components
 - [ ] Orbax support for plugin weights
+- [ ] Link in JAX kernels
 
 Possible some day:
 - [ ] Synchronous CPU runtime with IREE
 - [ ] Domain-specific optimization: for example using the DSP MLIR dialect
 - [ ] Benchmarking and optimizing the GPU runtime (if it can provide low enough latency)
 - [ ] Packaging to other formats: LADSPA, DSSI, LV2, VST
-
-## **Architecture**
-
-The architecture separates the plugin logic (Python) from the real-time audio engine (C++).
-
-1. **Plugin Definition (Python)**: You define a plugin by creating a class that inherits from jxap.Plugin and implements init and process methods. The DSP logic is written using JAX for array manipulation and flax NNX for state management.  
-2. **Exporting (Python to MLIR)**: The Python code uses `jax.export` to trace the JAX functions and convert them into MLIR (StableHLO dialect). This, along with metadata, is packaged into a .jxap file (a zip archive).  
-3. **Loading and Compilation (C++)**: The C++ runtime loads the .jxap file and once graph parameters (sample rate, buffer size, etc.) are known runs an MLIR pipeline to do some optimization (refining dynamic shapes into static, constant folding).  
-4. **Execution (C++ and PJRT)**: The refined MLIR is compiled into native machine code using the XLA PJRT runtime, creating a high-performance, JIT-compiled version of the plugin.  
-5. **Audio I/O (C++)**: A C++ host (jxap\_pipewire\_run) connects to the system's audio server (e.g., PipeWire) to handle real-time audio I/O, feeding buffers to the compiled PJRT executable.
 
 ## **Example: A Simple Phaser Plugin**
 
@@ -179,6 +170,26 @@ Launch the C++ host and point it to your exported plugin file.
     \--node\_name="JXAP Phaser Plugin"
 
 You can now use a patchbay like qpwgraph to route audio to the "JXAP Phaser Plugin" input and connect its output to your speakers.
+
+## **Architecture**
+
+The architecture separates the plugin logic (Python) from the real-time audio engine (C++).
+
+1. **Plugin Definition (Python)**: You define a plugin by creating a class that inherits from jxap.Plugin and implements init and process methods. The DSP logic is written using JAX for array manipulation and flax NNX for state management.  
+2. **Exporting (Python to MLIR)**: The Python code uses `jax.export` to trace the JAX functions and convert them into MLIR (StableHLO dialect). This, along with metadata, is packaged into a .jxap file (a zip archive).  
+3. **Loading and Compilation (C++, XLA/PJRT)**: The C++ runtime loads the .jxap file and once graph parameters (sample rate, buffer size, etc.) are known runs an MLIR pipeline to do some optimization (refining dynamic shapes into static, constant folding).  
+4. **Execution (C++, XLA/PJRT)**: The refined MLIR is compiled into native machine code using the XLA PJRT runtime, creating a high-performance, JIT-compiled version of the plugin.  
+5. **Audio I/O (C++)**: A C++ host (jxap\_pipewire\_run) connects to the system's audio server (e.g., PipeWire) to handle real-time audio I/O, feeding buffers to the compiled PJRT executable.
+
+### XLA vs IREE
+
+The XLA runtime is not optimized for real-time processing: it is asynchronous, built for multi-threading and might allocate mid-processing (TODO: reseach how much control over allocation XLA offers). The architecture of XLA carries some baggage too - it converts StableHLO to HLO, a graph representation not based on MLIR/LLVM. HLO is optimized and then converted back into MLIR. This makes it much harder to customize the compilation pipeline.
+
+The synchronous CPU runtime of IREE would be well suited to the task. It also keeps the pipeline entirely within LLVM. However it is not nearly as mature or widely used as XLA.
+
+Either way the plugin abstraction and StableHLO representation should in theory support both:
+- XLA runtime using StableHLO, using JAX kernels directly.
+- IREE runtime by lowering from StableHLO -> MLIR. This might need some plumbing for custom JAX kernels.
 
 ## **Repository Structure**
 

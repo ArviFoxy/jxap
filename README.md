@@ -199,8 +199,8 @@ The repository contains the C++ core, the Python library, and configuration file
 | :---- | :---- |
 | .devcontainer/ | Dockerfile and configuration for a complete VS Code Dev Containers environment. |
 | jxap/ | The core C++ library, including the PJRT plugin runner, MLIR pipeline, and PipeWire host. |
-| python/jxap/ | The Python library for defining plugins and the exporting mechanism. |
-| python/plugins/ | Example plugins. |
+| python/jxap/ | The Python library for plugins. Plugins implement the Plugin class. |
+| plugins/ | Example plugins. |
 | CMakeLists.txt | The main CMake file for building all C++ targets. It fetches and builds dependencies. |
 | XLA.cmake | CMake script for fetching the OpenXLA repository and building the PJRT CPU plugin with Bazel. |
 | StableHLO.cmake | CMake script to fetch and build the StableHLO and LLVM/MLIR projects. |
@@ -228,3 +228,4 @@ The recommended way to develop for JXAP is using VS Code Dev Containers. This pr
 3. **Container Build:**  
    * VS Code will now build the Docker image defined in .devcontainer/Dockerfile. This can take several minutes on the first run as it downloads and installs all dependencies, including the C++ toolchain, Python, and the XLA/MLIR toolchain.  
    * Once the build is complete, you will have a terminal inside the running container, with the repository mounted and ready. The Python environment is already set up with all packages from requirements.txt
+

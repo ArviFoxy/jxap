@@ -282,34 +282,34 @@ class PJRTBuffer {
   static absl::StatusOr<std::string> TypeToMLIR(PJRT_Buffer_Type type) {
     switch (type) {
       case PJRT_Buffer_Type_S8:
-        return "s8";
+        return "i8";
 
       case PJRT_Buffer_Type_U8:
-        return "u8";
+        return "i8";
 
       case PJRT_Buffer_Type_S16:
-        return "s16";
+        return "i16";
 
       case PJRT_Buffer_Type_U16:
-        return "u16";
+        return "i16";
 
       case PJRT_Buffer_Type_F16:
         return "f16";
 
       case PJRT_Buffer_Type_S32:
-        return "s32";
+        return "i32";
 
       case PJRT_Buffer_Type_U32:
-        return "u32";
+        return "i32";
 
       case PJRT_Buffer_Type_F32:
         return "f32";
 
       case PJRT_Buffer_Type_S64:
-        return "s64";
+        return "i64";
 
       case PJRT_Buffer_Type_U64:
-        return "u64";
+        return "i64";
 
       case PJRT_Buffer_Type_F64:
         return "f64";

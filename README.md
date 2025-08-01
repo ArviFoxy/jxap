@@ -35,7 +35,7 @@ Plan:
 - [x] Plugin export (to StableHLO)
 - [x] Basic MLIR passes (type refinement, constant folding)
 - [x] PJRT JIT runner
-- [ ] Pipewire runner (currently buggy / not connecting properly)
+- [ ] Pipewire runner (works, missing some features)
 - [ ] End-to-end safety tests (sample corruption, safe LUFS levels, generating test wavs). As a reusable library to be able to check plugins before running them on real speakers.
 - [ ] Benchmarks (at pluging runner level). Is the asynchronous XLA runtime going to be good enough for real-time processing?
 - [ ] Compilation cache / prewarming

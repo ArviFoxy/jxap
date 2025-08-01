@@ -21,7 +21,7 @@ absl::Status AppendLocToStatus(absl::Status status, std::source_location loc);
     absl::Status status_ = status_expr;                     \
     if (!status_.ok()) {                                    \
       constexpr auto loc = std::source_location::current(); \
-      return AppendLocToStatus(status_, loc);               \
+      return ::jxap::AppendLocToStatus(status_, loc);       \
     }                                                       \
   }
 

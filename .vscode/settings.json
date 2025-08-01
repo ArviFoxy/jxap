@@ -40,7 +40,7 @@
   "cmake.generator": "Ninja", // Optional: Use Ninja generator if installed
   "cmake.configureArgs": [
     "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", // Generate compile_commands.json for better IntelliSense
-    "-DCMAKE_BUILD_TYPE=Debug" // Default to Debug build type
+    "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
   ],
   "cmake.configureSettings": {
     "CMAKE_INSTALL_PREFIX": "${workspaceFolder}/install"

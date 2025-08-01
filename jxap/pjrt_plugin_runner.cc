@@ -545,8 +545,8 @@ class PJRTExecutable {
                          ctx->api);
     xla::HloModuleProtoWithConfig hlo_module_proto;
     hlo_module_proto.ParseFromArray(optimized_program.code, optimized_program.code_size);
-    LOG(INFO) << "Optimized PJRT program (format " << optimized_program.format << "):\n"
-              << hlo_module_proto.DebugString();
+    VLOG(1) << "Optimized PJRT program (format " << optimized_program.format << "):\n"
+            << hlo_module_proto.DebugString();
 
     return exec;
   }

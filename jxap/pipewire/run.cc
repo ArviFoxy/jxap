@@ -1,194 +1,369 @@
 // Pipewire client that runs a plugin using the JXAP PjRt runtime.
+// This version uses the dual pw_stream architecture for robust session manager
+// integration.
 
 #include <absl/base/log_severity.h>
 #include <absl/container/flat_hash_map.h>
 #include <absl/flags/flag.h>
 #include <absl/flags/parse.h>
 #include <absl/flags/usage.h>
+#include <absl/log/globals.h>
 #include <absl/log/initialize.h>
 #include <absl/log/log.h>
 #include <absl/strings/str_cat.h>
 #include <errno.h>
 #include <math.h>
-#include <pipewire/filter.h>
 #include <pipewire/pipewire.h>
+#include <pipewire/stream.h>
 #include <signal.h>
+#include <spa/buffer/buffer.h>
 #include <spa/param/audio/format-utils.h>
 #include <spa/param/latency-utils.h>
 #include <spa/param/props.h>
 #include <spa/pod/builder.h>
-#include <spa/pod/filter.h>
 #include <spa/pod/iter.h>
 #include <stdio.h>
 
-#include "absl/log/globals.h"
 #include "jxap/packaged_plugin.h"
 #include "jxap/pjrt_plugin_runner.h"
+#include "jxap/utils.h"
 
 ABSL_FLAG(std::string, plugin_path, "", "JXAP plugin path.");
-ABSL_FLAG(std::string, node_name, "", "Pipewire node name.");
-
-struct Port {};
+ABSL_FLAG(std::string, node_name, "jxap-filter", "Pipewire node name.");
 
 struct Data {
+  Data() { spa_zero(audio_info); }
+
+  std::mutex mutex;
   pw_main_loop *loop;
-  pw_filter *filter;
-  std::vector<Port *> in_ports;
-  std::vector<Port *> out_ports;
+  pw_context *context;
+
+  // Two streams for the dual-stream pattern
+  pw_stream *capture_stream;
+  pw_stream *playback_stream;
+
+  // JXAP plugin state
   std::unique_ptr<jxap::PJRTPluginRunner> runner;
   std::unique_ptr<jxap::PJRTCompiledPlugin> compiled_plugin;
-  jxap::PluginState plugin_state;
+  std::optional<jxap::PluginState> plugin_state;
+
+  // Position info, updated by the io_changed callback
+  spa_io_position *position = nullptr;
+  spa_audio_info_raw audio_info;
 };
 
 float FracToFloat(const spa_fraction &frac) {
+  if (frac.denom == 0) return 0.0f;
   return static_cast<float>(frac.num) / static_cast<float>(frac.denom);
 }
 
-extern "C" {
+// RAII helper that returns buffers to PipeWire after processing.
+class DequeuedBuffer {
+ public:
+  DequeuedBuffer(pw_buffer *buffer, pw_stream *stream) : buffer_(buffer), stream_(stream) {}
 
-void on_process(void *user_data, struct spa_io_position *position) {
-  Data *data = reinterpret_cast<Data *>(user_data);
-  const uint32_t n_samples = position->clock.duration;
-  const float sampling_rate = FracToFloat(position->clock.rate);
-  pw_log_trace("do process %d %d", n_samples, sampling_rate);
-
-  std::vector<jxap::Buffer> input_buffers(data->in_ports.size());
-  for (size_t i = 0; i < data->in_ports.size(); ++i) {
-    // TODO: reduce copying
-    void *dsp_buffer = pw_filter_get_dsp_buffer(data->in_ports[i], n_samples);
-    if (dsp_buffer == nullptr) return;
-    input_buffers[i].resize(n_samples);
-    std::memcpy(input_buffers[i].data(), dsp_buffer, n_samples * sizeof(float));
+  ~DequeuedBuffer() {
+    if (buffer_) {
+      pw_stream_queue_buffer(stream_, buffer_);
+    }
   }
 
-  if (!data->compiled_plugin) {
-    LOG(INFO) << "Compiling plugin for " << n_samples << " samples at " << sampling_rate << " Hz";
-    auto plugin_or_status = data->runner->Compile(n_samples, sampling_rate);
-    if (!plugin_or_status.ok()) {
-      pw_log_error("Failed to compile plugin: %s", plugin_or_status.status().ToString().c_str());
-      return;
+  spa_buffer *get() { return buffer_->buffer; }
+
+ private:
+  pw_buffer *buffer_;
+  pw_stream *stream_;
+};
+
+absl::Status RecompileIfNeeded(Data *data) {
+  if (!data->position) {
+    LOG(WARNING) << "No position info available, cannot determine buffer size.";
+    return absl::InternalError("No position info available");
+  }
+  if (data->audio_info.rate == 0) {
+    LOG(WARNING) << "No audio info available, cannot determine sample rate.";
+    return absl::InternalError("No audio info available");
+  }
+  const uint32_t n_samples = data->position->clock.duration;
+  const float sampling_rate = data->audio_info.rate;
+
+  if (data->compiled_plugin) {
+    if (data->compiled_plugin->audio_buffer_size() == n_samples &&
+        data->compiled_plugin->sample_rate() == sampling_rate) {
+      return absl::OkStatus();  // No need to recompile
     }
-    data->compiled_plugin = std::move(plugin_or_status.value());
+  }
+
+  LOG(INFO) << "Compiling plugin for " << n_samples << " samples buffer size at " << sampling_rate
+            << " Hz";
+  auto plugin_or_status = data->runner->Compile(n_samples, sampling_rate);
+  RETURN_IF_ERROR(plugin_or_status.status());
+  data->compiled_plugin = std::move(plugin_or_status.value());
+  data->plugin_state = std::nullopt;
+  return absl::OkStatus();
+}
+
+extern "C" {
+// This is the main processing callback, driven by the playback stream.
+// It synchronizes buffers from both capture and playback streams.
+void on_playback_process(void *user_data) {
+  Data *data = static_cast<Data *>(user_data);
+  std::lock_guard<std::mutex> lock(data->mutex);
+
+  // Dequeue buffers from both streams.
+  DequeuedBuffer capture_buffer(pw_stream_dequeue_buffer(data->capture_stream),
+                                data->capture_stream);
+  if (!capture_buffer.get()) {
+    LOG(WARNING) << "Out of capture buffers.";
+    return;
+  }
+  DequeuedBuffer playback_buffer(pw_stream_dequeue_buffer(data->playback_stream),
+                                 data->playback_stream);
+  if (!playback_buffer.get()) {
+    LOG(WARNING) << "Out of playback buffers.";
+    return;
+  }
+
+  if (!data->position) {
+    LOG(WARNING) << "No position info available, cannot determine buffer size.";
+    return;
+  }
+  const uint32_t n_samples = data->position->clock.duration;
+
+  auto status = RecompileIfNeeded(data);
+  if (!status.ok()) {
+    LOG(ERROR) << "Failed to recompile plugin: " << status;
+    return;
+  }
+
+  // Prepare input buffers for the JXAP plugin.
+  size_t buffer_size = n_samples * sizeof(float);
+  std::vector<jxap::Buffer> input_buffers(1);  // Assuming mono input for now
+  void *capture_data = capture_buffer.get()->datas[0].data;
+  if (capture_data == nullptr) {
+    LOG(WARNING) << "Capture buffer has no data.";
+    return;
+  }
+  input_buffers[0].resize(buffer_size);
+  std::memcpy(input_buffers[0].data(), capture_data, buffer_size);
+
+  // Initialize the JXAP plugin if not already done.
+  if (data->plugin_state == std::nullopt) {
     auto status_or_state = data->compiled_plugin->Init(input_buffers);
     if (!status_or_state.ok()) {
-      pw_log_error("Failed to initialize plugin: %s", status_or_state.status().ToString().c_str());
+      LOG(ERROR) << "Failed to initialize plugin: " << status_or_state.status();
       return;
     }
-    // TODO: reduce copying
     data->plugin_state = std::move(status_or_state.value());
   }
 
-  std::vector<jxap::Buffer> output_buffers;
-  auto status = data->compiled_plugin->Update(input_buffers, &data->plugin_state, &output_buffers);
+  // Run the JXAP plugin.
+  std::vector<jxap::Buffer> output_buffers(1);
+  status =
+      data->compiled_plugin->Update(input_buffers, &data->plugin_state.value(), &output_buffers);
   if (!status.ok()) {
-    pw_log_error("Failed to update plugin: %s", status.ToString().c_str());
+    LOG(ERROR) << "Failed to update plugin: " << status;
     return;
   }
 
-  for (size_t i = 0; i < data->out_ports.size(); ++i) {
-    // TODO: reduce copying
-    void *dsp_buffer = pw_filter_get_dsp_buffer(data->out_ports[i], n_samples);
-    if (dsp_buffer == nullptr) return;
-    std::memcpy(dsp_buffer, output_buffers[i].data(), n_samples * sizeof(float));
-  }
-}
-
-void on_state_changed(void *user_data, enum pw_filter_state old, enum pw_filter_state state,
-                      const char *error) {
-  Data *data = reinterpret_cast<Data *>(user_data);
-  if (state == PW_FILTER_STATE_ERROR) {
-    LOG(ERROR) << "Filter state changed from " << pw_filter_state_as_string(old) << " to "
-               << pw_filter_state_as_string(state) << ": " << error;
-  } else {
-    LOG(INFO) << "Filter state changed from " << pw_filter_state_as_string(old) << " to "
-              << pw_filter_state_as_string(state);
-  }
-}
-
-// This handler is called when the server proposes a format for a port.
-// We must inspect the proposed formats and choose one that our filter supports.
-void on_param_changed(void *user_data, void *port_data, uint32_t id, const struct spa_pod *param) {
-  Data *data = reinterpret_cast<Data *>(user_data);
-
-  // We only handle format changes here.
-  if (id != SPA_PARAM_EnumFormat) {
-    return;
-  }
-
-  if (param == nullptr) {
-    LOG(INFO) << "Format negotiation reset.";
-    return;
-  }
-
-  struct spa_audio_info_raw info;
-  uint32_t media_type, media_subtype;
-  const struct spa_pod *format_pod = nullptr;
-  const struct spa_pod_prop *prop;
-
-  // Iterate through the list of possible formats proposed by the server.
-  // We will pick the first one that matches our requirement: 32-bit float audio.
-  SPA_POD_OBJECT_FOREACH((const struct spa_pod_object *)param, prop) {
-    const struct spa_pod *value = &prop->value;
-
-    if (spa_format_parse(value, &media_type, &media_subtype) < 0) continue;
-
-    if (media_type != SPA_MEDIA_TYPE_audio || media_subtype != SPA_MEDIA_SUBTYPE_raw) continue;
-
-    if (spa_format_audio_raw_parse(value, &info) < 0) continue;
-
-    // We support 32-bit float, planar format.
-    if (info.format == SPA_AUDIO_FORMAT_F32P) {
-      format_pod = value;
-      break;
+  // Copy plugin output to the playback buffer.
+  if (!output_buffers.empty()) {
+    void *playback_data = playback_buffer.get()->datas[0].data;
+    if (playback_data) {
+      size_t buffer_size = n_samples * sizeof(float);
+      if (output_buffers[0].size() != buffer_size) {
+        LOG(WARNING) << "Plugin output buffer size mismatch.";
+        return;
+      }
+      std::memcpy(playback_data, output_buffers[0].data(), buffer_size);
+      playback_buffer.get()->datas[0].chunk->offset = 0;
+      playback_buffer.get()->datas[0].chunk->stride = sizeof(float);
+      playback_buffer.get()->datas[0].chunk->size = buffer_size;
     }
   }
+}
 
-  if (format_pod == nullptr) {
-    LOG(ERROR) << "No suitable format found. This filter only supports 32-bit "
-                  "float planar audio.";
-    pw_filter_set_error(data->filter, -EINVAL, "no suitable format found");
+// The capture stream's process callback simply triggers the playback one.
+// This makes the capture stream the "driver" of our processing chain.
+void on_capture_process(void *user_data) {
+  Data *data = static_cast<Data *>(user_data);
+  if (pw_stream_trigger_process(data->playback_stream) < 0) {
+    // Playback side is not ready, so we dequeue and immediately requeue
+    // the capture buffer to avoid stalling the graph.
+    pw_buffer *capture_buf;
+    while ((capture_buf = pw_stream_dequeue_buffer(data->capture_stream)) != nullptr) {
+      pw_stream_queue_buffer(data->capture_stream, capture_buf);
+    }
+  }
+}
+
+void on_capture_state_changed(void *user_data, enum pw_stream_state old, enum pw_stream_state state,
+                              const char *error) {
+  Data *data = static_cast<Data *>(user_data);
+
+  LOG(INFO) << "Capture stream changed from " << pw_stream_state_as_string(old) << " to "
+            << pw_stream_state_as_string(state);
+
+  switch (state) {
+    case PW_STREAM_STATE_STREAMING:
+      break;
+
+    case PW_STREAM_STATE_PAUSED:
+      pw_stream_flush(data->playback_stream, false);
+      break;
+
+    case PW_STREAM_STATE_UNCONNECTED:
+      break;
+
+    case PW_STREAM_STATE_ERROR:
+      LOG(ERROR) << "Capture stream entered error state: " << error;
+      pw_main_loop_quit(data->loop);
+      break;
+
+    default:
+      break;
+  }
+}
+
+void on_playback_state_changed(void *user_data, enum pw_stream_state old,
+                               enum pw_stream_state state, const char *error) {
+  Data *data = static_cast<Data *>(user_data);
+  std::lock_guard<std::mutex> lock(data->mutex);
+
+  LOG(INFO) << "Playback stream changed from " << pw_stream_state_as_string(old) << " to "
+            << pw_stream_state_as_string(state);
+
+  switch (state) {
+    case PW_STREAM_STATE_STREAMING: {
+      auto status = RecompileIfNeeded(data);
+      if (!status.ok()) {
+        LOG(ERROR) << "Failed to recompile plugin: " << status;
+      }
+      break;
+    }
+
+    case PW_STREAM_STATE_PAUSED: {
+      auto status = RecompileIfNeeded(data);
+      if (!status.ok()) {
+        LOG(ERROR) << "Failed to recompile plugin: " << status;
+      }
+      pw_stream_flush(data->playback_stream, false);
+      break;
+    }
+
+    case PW_STREAM_STATE_UNCONNECTED: {
+      data->compiled_plugin.reset();
+      data->plugin_state = std::nullopt;
+    } break;
+
+    case PW_STREAM_STATE_ERROR:
+      LOG(ERROR) << "Playback stream entered error state: " << error;
+      pw_main_loop_quit(data->loop);
+      break;
+
+    default:
+      break;
+  }
+}
+
+void on_param_changed(void *user_data, uint32_t id, const struct spa_pod *param,
+                      enum spa_direction direction) {
+  if (param == nullptr) {
     return;
   }
 
-  LOG(INFO) << "Format selected: 32-bit Float Planar, Rate: " << info.rate
-            << ", Channels: " << info.channels;
+  Data *data = static_cast<Data *>(user_data);
+  pw_stream *stream =
+      (direction == SPA_DIRECTION_INPUT) ? data->capture_stream : data->playback_stream;
+  if (stream == nullptr) {
+    LOG(ERROR) << "Stream is null, cannot handle param change.";
+    return;
+  }
+  std::string stream_name = pw_stream_get_name(stream);
 
-  // We have found a suitable format. Now we build our response to the server
-  // to confirm the format and specify our buffer requirements.
-  uint8_t buffer[1024];
-  struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
-  const struct spa_pod *params[2];
+  switch (id) {
+    case SPA_PARAM_Format: {
+      std::lock_guard<std::mutex> lock(data->mutex);
+      spa_zero(data->audio_info);
+      if (spa_format_audio_raw_parse(param, &data->audio_info) >= 0) {
+        LOG(INFO) << "Stream `" << stream_name << "` format set: " << data->audio_info.channels
+                  << " channels at " << data->audio_info.rate << " Hz";
+      } else {
+        LOG(ERROR) << "Failed to parse playback stream format.";
+        return;
+      }
+      break;
+    }
 
-  // Chosen audio format.
-  params[0] = format_pod;
-  // Buffer requirements.
-  params[1] = static_cast<struct spa_pod *>(spa_pod_builder_add_object(
-      &b, SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers, SPA_PARAM_BUFFERS_buffers,
-      SPA_POD_Int(16),  // A decent number of buffers
-      SPA_PARAM_BUFFERS_blocks, SPA_POD_Int(1), SPA_PARAM_BUFFERS_size,
-      SPA_POD_Int(131072),                       // A reasonable max buffer size
-      SPA_PARAM_BUFFERS_stride, SPA_POD_Int(4),  // Stride for 32-bit float
-      SPA_PARAM_BUFFERS_align, SPA_POD_Int(16)));
+    case SPA_PARAM_Buffers: {
+      int num_buffers;
+      int result = spa_pod_parse_object(param, SPA_TYPE_OBJECT_ParamBuffers, nullptr,
+                                        SPA_PARAM_BUFFERS_buffers, SPA_POD_OPT_Int(&num_buffers));
+      LOG(INFO) << "Stream `" << stream_name << "` number of buffers changed: " << num_buffers;
+      break;
+    }
 
-  // Update the port parameters to complete the negotiation.
-  pw_filter_update_params(data->filter, port_data, params, 2);
+    case SPA_PARAM_IO:
+      // Handle IO area changes.
+      break;
+
+    default:
+      LOG(INFO) << "Unhandled playback param change: " << id;
+      return;
+  }
+  if (param == nullptr || id != SPA_PARAM_Format) {
+    return;
+  }
 }
 
-const struct pw_filter_events kFilterEvents = {
-    .version = PW_VERSION_FILTER_EVENTS,
-    .state_changed = on_state_changed,
-    .param_changed = on_param_changed,
-    .process = on_process,
+void on_capture_param_changed(void *user_data, uint32_t id, const struct spa_pod *param) {
+  on_param_changed(user_data, id, param, SPA_DIRECTION_INPUT);
+}
+
+void on_playback_param_changed(void *user_data, uint32_t id, const struct spa_pod *param) {
+  on_param_changed(user_data, id, param, SPA_DIRECTION_OUTPUT);
+}
+
+// This callback receives timing information from the graph driver.
+void on_playback_io_changed(void *user_data, uint32_t id, void *area, uint32_t size) {
+  Data *data = static_cast<Data *>(user_data);
+  std::lock_guard<std::mutex> lock(data->mutex);
+  if (id == SPA_IO_Position) {
+    data->position = static_cast<spa_io_position *>(area);
+    LOG(INFO) << "Playback stream position updated: "
+              << "duration = " << data->position->clock.duration
+              << ", rate = " << 1.0f / FracToFloat(data->position->clock.rate)
+              << ", nsec = " << data->position->clock.nsec;
+    auto status = RecompileIfNeeded(data);
+    if (!status.ok()) {
+      LOG(ERROR) << "Failed to recompile plugin: " << status;
+    }
+  }
+}
+
+const struct pw_stream_events kCaptureStreamEvents = {
+    .version = PW_VERSION_STREAM_EVENTS,
+    .state_changed = on_capture_state_changed,
+    .param_changed = on_capture_param_changed,
+    .process = on_capture_process,
+};
+
+const struct pw_stream_events kPlaybackStreamEvents = {
+    .version = PW_VERSION_STREAM_EVENTS,
+    .state_changed = on_playback_state_changed,
+    .io_changed = on_playback_io_changed,
+    .param_changed = on_playback_param_changed,
+    .process = on_playback_process,
 };
 
 void do_quit(void *user_data, int signal_number) {
-  Data *data = reinterpret_cast<Data *>(user_data);
+  Data *data = static_cast<Data *>(user_data);
   pw_main_loop_quit(data->loop);
 }
 
-}  // namespace
+}  // extern "C"
 
-int main(int argc, char *argv[]) {
+int main(int argc, char **argv) {
   absl::InitializeLog();
   absl::SetStderrThreshold(absl::LogSeverityAtLeast::kInfo);
   absl::SetProgramUsageMessage("Runs a JXAP plugin as a pipewire filter.");
@@ -205,73 +380,92 @@ int main(int argc, char *argv[]) {
   }
   auto plugin = std::move(plugin_or_status.value());
 
+  // Create the plugin runner.
+  auto runner_or_status = jxap::PJRTPluginRunner::LoadPlugin(plugin);
+  if (!runner_or_status.ok()) {
+    LOG(ERROR) << "Failed to create plugin runner: " << runner_or_status.status();
+    return -1;
+  }
   Data pw_data;
+  pw_data.runner = std::move(runner_or_status.value());
+
   LOG(INFO) << "Creating Pipewire loop";
   pw_data.loop = pw_main_loop_new(nullptr);
+  pw_data.context = pw_context_new(pw_main_loop_get_loop(pw_data.loop), nullptr, 0);
   pw_loop_add_signal(pw_main_loop_get_loop(pw_data.loop), SIGINT, do_quit, &pw_data);
   pw_loop_add_signal(pw_main_loop_get_loop(pw_data.loop), SIGTERM, do_quit, &pw_data);
 
-  std::vector<uint8_t> spa_pod_buffer(1024);
-  struct spa_pod_builder pod_builder =
-      SPA_POD_BUILDER_INIT(spa_pod_buffer.data(), static_cast<uint32_t>(spa_pod_buffer.size()));
-
-  // Create the pipewire filter.
-  std::string filter_name = absl::GetFlag(FLAGS_node_name);
-  LOG(INFO) << "Creating Pipewire node " << filter_name;
-  std::string node_description = absl::StrCat("JXAP Plugin Filter ", filter_name);
-  pw_data.filter =
-      pw_filter_new_simple(pw_main_loop_get_loop(pw_data.loop), filter_name.c_str(),
-                           pw_properties_new(PW_KEY_MEDIA_TYPE, "Audio",                         //
-                                             PW_KEY_MEDIA_CATEGORY, "Duplex",                    //
-                                             PW_KEY_MEDIA_ROLE, "DSP",                           //
-                                             PW_KEY_MEDIA_CLASS, "Audio/Duplex",                 //
-                                             PW_KEY_NODE_NAME, filter_name.c_str(),              //
-                                             PW_KEY_NODE_DESCRIPTION, node_description.c_str(),  //
-                                             PW_KEY_NODE_PASSIVE, "true",                        //
-                                             "filter.smart", "true",                             //
+  // Create Playback Stream (Source)
+  std::string node_name = absl::GetFlag(FLAGS_node_name);
+  std::string playback_name = absl::StrCat(node_name, "-playback");
+  pw_data.playback_stream =
+      pw_stream_new_simple(pw_main_loop_get_loop(pw_data.loop), playback_name.c_str(),
+                           pw_properties_new(PW_KEY_MEDIA_TYPE, "Audio",                     //
+                                             PW_KEY_MEDIA_CATEGORY, "Playback",              //
+                                             PW_KEY_MEDIA_CLASS, "Audio/Source",             //
+                                             PW_KEY_MEDIA_ROLE, "DSP",                       //
+                                             PW_KEY_NODE_DESCRIPTION, "JXAP Plugin Output",  //
+                                             PW_KEY_NODE_GROUP, node_name.c_str(),           //
+                                             PW_KEY_NODE_LINK_GROUP, node_name.c_str(),      //
+                                             PW_KEY_NODE_VIRTUAL, "true",                    //
+                                             // "resample.prefill", "true",                     //
                                              nullptr),
-                           &kFilterEvents, &pw_data);
+                           &kPlaybackStreamEvents, &pw_data);
 
-  // Create the input/output ports.
-  for (const auto &input_buffer_name : plugin.input_buffer_names) {
-    LOG(INFO) << "Adding input port: " << input_buffer_name;
-    void *port_data = pw_filter_add_port(
-        pw_data.filter, PW_DIRECTION_INPUT, PW_FILTER_PORT_FLAG_MAP_BUFFERS, sizeof(Port),
-        pw_properties_new(PW_KEY_FORMAT_DSP, "32 bit float mono audio",  //
-                          PW_KEY_PORT_NAME, input_buffer_name.c_str(),   //
-                          nullptr),
-        /*params=*/nullptr, /*nparams=*/0);
-    pw_data.in_ports.push_back(reinterpret_cast<Port *>(port_data));
-  }
-  for (const auto &output_buffer_name : plugin.output_buffer_names) {
-    LOG(INFO) << "Adding output port: " << output_buffer_name;
-    void *port_data = pw_filter_add_port(
-        pw_data.filter, PW_DIRECTION_OUTPUT, PW_FILTER_PORT_FLAG_MAP_BUFFERS, sizeof(Port),
-        pw_properties_new(PW_KEY_FORMAT_DSP, "32 bit float mono audio",  //
-                          PW_KEY_PORT_NAME, output_buffer_name.c_str(),  //
-                          nullptr),
-        /*params=*/nullptr, /*nparams=*/0);
-    pw_data.out_ports.push_back(reinterpret_cast<Port *>(port_data));
-  }
+  // Create Capture Stream (Sink)
+  std::string capture_name = absl::StrCat(absl::GetFlag(FLAGS_node_name), "-capture");
+  pw_data.capture_stream =
+      pw_stream_new_simple(pw_main_loop_get_loop(pw_data.loop), capture_name.c_str(),
+                           pw_properties_new(PW_KEY_MEDIA_TYPE, "Audio",                    //
+                                             PW_KEY_MEDIA_CATEGORY, "Capture",              //
+                                             PW_KEY_MEDIA_CLASS, "Audio/Sink",              //
+                                             PW_KEY_MEDIA_ROLE, "DSP",                      //
+                                             PW_KEY_NODE_DESCRIPTION, "JXAP Plugin Input",  //
+                                             PW_KEY_NODE_GROUP, node_name.c_str(),          //
+                                             PW_KEY_NODE_LINK_GROUP, node_name.c_str(),     //
+                                             PW_KEY_NODE_VIRTUAL, "true",                   //
+                                             // "resample.prefill", "true",                    //
+                                             nullptr),
+                           &kCaptureStreamEvents, &pw_data);
 
-  // Connct the filter. We ask that our process function is called in a realtime thread.
-  std::vector<const spa_pod *> params;
-  auto process_latency = SPA_PROCESS_LATENCY_INFO_INIT(.ns = 10 * SPA_NSEC_PER_MSEC);
-  params.push_back(
-      spa_process_latency_build(&pod_builder, SPA_PARAM_ProcessLatency, &process_latency));
-  if (pw_filter_connect(pw_data.filter, PW_FILTER_FLAG_RT_PROCESS, params.data(), params.size()) <
-      0) {
-    LOG(ERROR) << "Failed to connect filter.";
-    pw_filter_destroy(pw_data.filter);
-    pw_main_loop_destroy(pw_data.loop);
-    pw_deinit();
+  // Connect Streams
+  uint8_t buffer[1024];
+  spa_pod_builder pod_builder = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
+  const spa_pod *params[2];
+  spa_audio_info_raw format_info =
+      SPA_AUDIO_INFO_RAW_INIT(.format = SPA_AUDIO_FORMAT_F32P, .channels = 1,
+                              .position = {SPA_AUDIO_CHANNEL_MONO});
+  params[0] = spa_format_audio_raw_build(&pod_builder, SPA_PARAM_EnumFormat, &format_info);
+  params[1] = reinterpret_cast<spa_pod *>(
+      spa_pod_builder_add_object(&pod_builder, SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers,
+                                 SPA_PARAM_BUFFERS_stride, SPA_POD_Int(4),  //
+                                 SPA_PARAM_BUFFERS_buffers, SPA_POD_CHOICE_RANGE_Int(8, 4, 32)));
+
+  // Connect playback stream first, with the TRIGGER flag.
+  if (pw_stream_connect(pw_data.playback_stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
+                        (pw_stream_flags)(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS |
+                                          PW_STREAM_FLAG_RT_PROCESS | PW_STREAM_FLAG_TRIGGER),
+                        params, 2) < 0) {
+    LOG(ERROR) << "Failed to connect playback stream.";
     return -1;
   }
 
-  /* and wait while we let things run */
+  // Connect capture stream.
+  if (pw_stream_connect(pw_data.capture_stream, PW_DIRECTION_INPUT, PW_ID_ANY,
+                        (pw_stream_flags)(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS |
+                                          PW_STREAM_FLAG_RT_PROCESS),
+                        params, 2) < 0) {
+    LOG(ERROR) << "Failed to connect capture stream.";
+    return -1;
+  }
+
+  LOG(INFO) << "Streams connecting... Press Ctrl-C to exit.";
   pw_main_loop_run(pw_data.loop);
 
-  pw_filter_destroy(pw_data.filter);
+  LOG(INFO) << "Cleaning up...";
+  pw_stream_destroy(pw_data.capture_stream);
+  pw_stream_destroy(pw_data.playback_stream);
+  pw_context_destroy(pw_data.context);
   pw_main_loop_destroy(pw_data.loop);
   pw_deinit();
 

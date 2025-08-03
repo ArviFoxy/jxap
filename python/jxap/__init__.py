@@ -1,5 +1,7 @@
 """JAX Audio Plugins library."""
 
-from jxap.types import *
-from jxap.export import *
-from jxap.delay import *
+from .types import *
+from .export import *
+from .delay import *
+from .decibel import *
+from . import filters

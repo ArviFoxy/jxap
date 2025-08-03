@@ -2,9 +2,7 @@
 
 from absl import app
 from absl import flags
-import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
 import jxap
 
 
@@ -20,20 +18,20 @@ class PhaserPlugin(jxap.Plugin):
     output = jxap.OutputPort("output")
 
     # State of the audio filter. Variables that change are wrapped with "jxap.State".
-    last_input: jxap.State[jax.Array]
-    last_output: jxap.State[jax.Array]
+    last_input: jxap.State[jxap.Sample]
+    last_output: jxap.State[jxap.Sample]
 
-    def init(self, inputs, sample_rate):
+    def init(self, sample_rate: jxap.Constant):
         """Initializes the filter's state with silence."""
-        del inputs, sample_rate  # Unused.
+        del sample_rate  # Unused.
         self.last_input = jxap.State(0.0)
         self.last_output = jxap.State(0.0)
 
-    def process(
+    def __call__(
         self,
-        inputs: dict[jxap.InputPort, jxap.Buffer],
-        sample_rate: Float[Array, ""],
-    ) -> dict[jxap.OutputPort, jxap.Buffer]:
+        inputs: dict[jxap.InputPort, jxap.Sample],
+        sample_rate: jxap.Constant,
+    ) -> dict[jxap.OutputPort, jxap.Sample]:
         """Processes one buffer of audio. All samples are float32."""
         # Calculate the filter coefficient 'alpha' from the desired center frequency.
         # This makes the filter's effect consistent across different sample rates.
@@ -41,26 +39,13 @@ class PhaserPlugin(jxap.Plugin):
         tan_theta = jnp.tan(jnp.pi * self.center_freq_hz / sample_rate)
         alpha = (1.0 - tan_theta) / (1.0 + tan_theta)
 
-        def allpass_step(carry, x_n):
-            """Processes a single sample through the all-pass filter."""
-            x_prev, y_prev = carry
-            y_n = alpha * x_n + x_prev - alpha * y_prev
-            return (x_n, y_n), y_n
-
-        # `jxap.Buffer` is just an alias for a Jax array with one dimension.
-        input_buffer: Float[Array, "BufferSize"] = inputs[self.input]
-
-        # Use jax.lax.scan for efficient vectorized processing of the filter.
-        initial_state = (self.last_input.value, self.last_output.value)
-        (final_input, final_output), output_buffer = jax.lax.scan(
-            allpass_step,
-            initial_state,
-            input_buffer,
-        )
-        # Update the plugin's state.
-        self.last_input.value = final_input
-        self.last_output.value = final_output
-        return {self.output: output_buffer}
+        x_n = inputs[self.input]
+        x_prev = self.last_input.value
+        y_prev = self.last_output.value
+        y_n = alpha * x_n + x_prev - alpha * y_prev
+        self.last_input.value = x_n
+        self.last_output.value = y_n
+        return {self.output: y_n}
 
 
 # --- Exporting Logic ---

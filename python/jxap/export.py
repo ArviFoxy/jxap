@@ -137,10 +137,15 @@ def export_plugin(plugin: types.Plugin,
 
     initialized_graphdef = _Closure()
     graphdef, empty_state, static = nnx.split(plugin, types.State, ...)
+    print("  graphdef:", graphdef)
+    print("  empty_state:", empty_state)
+    print("  static:", static)
 
+    # TODO: remove `buffers`
     def _init_fn(buffers, sample_rate):
+        del buffers  # Unused.
         runtime_plugin = nnx.merge(graphdef, empty_state, static)
-        runtime_plugin.init(buffers, sample_rate)
+        runtime_plugin.init(sample_rate)
         init_graphdef, init_state, _ = nnx.split(runtime_plugin, types.State,
                                                  ...)
         initialized_graphdef.value = init_graphdef
@@ -156,10 +161,15 @@ def export_plugin(plugin: types.Plugin,
 
     def _update_fn(state, buffers, sample_rate):
         state_pytree = jax.tree.unflatten(exported_init_fn.out_tree, state)
-        runtime_plugin = nnx.merge(initialized_graphdef.value, state_pytree,
-                                   static)
-        outputs = runtime_plugin.process(buffers, sample_rate)
-        _, new_state, _ = nnx.split(runtime_plugin, types.State, ...)
+
+        def _update_step(carry_state, buffers_n):
+            runtime_plugin = nnx.merge(initialized_graphdef.value, carry_state,
+                                       static)
+            y_n = runtime_plugin(buffers_n, sample_rate)
+            _, new_carry_state, _ = nnx.split(runtime_plugin, types.State, ...)
+            return new_carry_state, y_n
+
+        new_state, outputs = jax.lax.scan(_update_step, state_pytree, buffers)
         return new_state, outputs
 
     state_shape = exported_init_fn.out_avals

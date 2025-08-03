@@ -15,7 +15,7 @@ class CopyPlugin(jxap.Plugin):
     input = jxap.InputPort("input")
     output = jxap.OutputPort("output")
 
-    def process(self, inputs, sample_rate):
+    def __call__(self, inputs, sample_rate):
         del sample_rate  # Unused.
         return {self.output: inputs[self.input]}
 

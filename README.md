@@ -12,10 +12,6 @@ The goal is to combine the ease of Python while delivering performance comparabl
 * **Advanced Optimization**: The JIT compiler leverages the host’s CPU extensions and static audio graph parameters (e.g., buffer size, sample rate) to perform optimizations that are difficult in a typical C++ implementation.  
 * **Cross-Platform**: The exported plugin bytecode is platform-independent and allows for compilation on both CPUs and GPUs.
 
-### **Limitations**
-
-* **Vectorized Programming Model**: JAX achieves its performance by operating on entire arrays at once. This requires writing code in a "vectorized" or "array-oriented" style, which can be a shift for those accustomed to writing explicit loops.
-
 ### Motivation 
 
 This project grew out of my DIY audio system, which is curretly a 3.1 wireless setup (using roc-streaming) with a central linux DSP.
@@ -36,10 +32,10 @@ Plan:
 - [x] Basic MLIR passes (type refinement, constant folding)
 - [x] PJRT JIT runner
 - [ ] Pipewire runner (works, missing some features)
+- [ ] Library of basic filter components, re-buffering, re-sampling
 - [ ] End-to-end safety tests (sample corruption, safe LUFS levels, generating test wavs). As a reusable library to be able to check plugins before running them on real speakers.
-- [ ] Benchmarks (at pluging runner level). Is the asynchronous XLA runtime going to be good enough for real-time processing?
 - [ ] Compilation cache / prewarming
-- [ ] Library of basic filter components
+- [ ] Benchmarks (at pluging runner level). So far no issues at 16/44.1 kHz buffer size.
 - [ ] Orbax support for plugin weights
 - [ ] Link in JAX kernels
 
@@ -55,88 +51,95 @@ This example demonstrates the end-to-end workflow with a simple phase-shifting p
 
 ### **1\. The Plugin Code**
 
-This plugin uses a first-order all-pass filter to shift the phase of the incoming audio signal. This filter needs to remember the last input and output sample - stateful variables are marked by `jxap.State` which is a kind of `nnx.Varaible`. The file also includes a main function that exports the packaged plugin. Under the hood the stateful updates are transformed into a pure functional form before being exported.
+This is a flanger plugin: it combines the signal with a delayed version of itself. The delay oscillates in time.
+
+This filter needs to remember the last input and output sample - stateful variables are marked by `jxap.State` (which is a type of `nnx.Varaible`). 
+
+At the end there is a main function that exports the packaged plugin. Under the hood the stateful updates are transformed into a pure functional form before being exported.
 
 `plugins/phaser_plugin.py`:
 
 ```python
-
 from absl import app
 from absl import flags
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
 import jxap
 
 
-class PhaserPlugin(jxap.Plugin):
-    """A simple all-pass filter to create a phase shift effect."""
+class FlangerPlugin(jxap.Plugin):
+    """A flanger effect using a modulated delay line."""
 
-    # The center frequency of the filter in Hz. This controls the filter's response.
-    center_freq_hz: float = 440.0
+    # --- Controllable Parameters ---
+    max_delay_s: float = 0.02  # 20 milliseconds
+    rate_hz: float = 0.5  # 0.5 Hz oscillation
+    depth_s: float = 0.005  # 5 milliseconds depth
+    feedback: float = 0.7  # Feedback for the delay line
+    mix: float = 0.5  # Mix of the original signal and the delayed signal
 
-    # Names of the input and output buffers. These will correspond to Pipewire
-    # port names. All ports are single channel but there can be any number of ports.
+
+    # --- Ports ---
     input = jxap.InputPort("input")
     output = jxap.OutputPort("output")
 
-    # State of the audio filter. Variables that change are wrapped with "jxap.State".
-    last_input: jxap.State[jax.Array]
-    last_output: jxap.State[jax.Array]
+    # --- Internal State ---
+    lfo_phase: jxap.State[jax.Array]
+    delay: jxap.VariableDelay
 
-    def init(self, inputs, sample_rate):
-        """Initializes the filter's state with silence."""
-        del inputs, sample_rate  # Unused.
-        self.last_input = jxap.State(0.0)
-        self.last_output = jxap.State(0.0)
+    def init(self, sample_rate: jxap.Constant):
+        """Initializes the plugin's state."""
+        self.delay = jxap.VariableDelay(max_seconds=self.max_delay_s)
+        self.delay.init(sample_rate)
+        self.lfo_phase = jxap.State(jnp.asarray(0.0))
 
-    def process(
+    def __call__(
         self,
-        inputs: dict[jxap.InputPort, jxap.Buffer],
-        sample_rate: Float[Array, ""],
-    ) -> dict[jxap.OutputPort, jxap.Buffer]:
-        """Processes one buffer of audio. All samples are float32."""
-        # Calculate the filter coefficient 'alpha' from the desired center frequency.
-        # This makes the filter's effect consistent across different sample rates.
-        # All of this computation will be inlined by the JIT compiler.
-        tan_theta = jnp.tan(jnp.pi * self.center_freq_hz / sample_rate)
-        alpha = (1.0 - tan_theta) / (1.0 + tan_theta)
+        inputs: dict[jxap.InputPort, jxap.Sample],
+        sample_rate: jxap.Constant,
+    ) -> dict[jxap.OutputPort, jxap.Sample]:
+        """Processes one sample of audio."""
 
-        def allpass_step(carry, x_n):
-            """Processes a single sample through the all-pass filter."""
-            x_prev, y_prev = carry
-            y_n = alpha * x_n + x_prev - alpha * y_prev
-            return (x_n, y_n), y_n
+        x = inputs[self.input]
 
-        # `jxap.Buffer` is just an alias for a Jax array with one dimension.
-        input_buffer: Float[Array, "BufferSize"] = inputs[self.input]
+        # 1. Calculate LFO value
+        lfo_increment = 2.0 * jnp.pi * self.rate_hz / sample_rate
+        new_lfo_phase = (self.lfo_phase.value + lfo_increment) % (2.0 * jnp.pi)
+        self.lfo_phase.value = new_lfo_phase
+        lfo_val = jnp.sin(new_lfo_phase)
 
-        # Use jax.lax.scan for efficient vectorized processing of the filter.
-        initial_state = (self.last_input.value, self.last_output.value)
-        (final_input, final_output), output_buffer = jax.lax.scan(
-            allpass_step,
-            initial_state,
-            input_buffer,
-        )
-        # Update the plugin's state.
-        self.last_input.value = final_input
-        self.last_output.value = final_output
-        return {self.output: output_buffer}
+        # 2. Calculate modulated delay time in seconds
+        modulated_delay = self.depth_s * (1.0 + lfo_val) / 2.0
+
+        # 3. Read from the delay buffer
+        delayed_sample = self.delay.read(modulated_delay, sample_rate)
+
+        # 4. Apply feedback and write to the delay buffer
+        feedback_sample = jnp.clip(x + delayed_sample * self.feedback, -1.0,
+                                   1.0)
+        self.delay.write(feedback_sample)
+
+        # 5. Calculate the final output sample
+        y = (1.0 - self.mix) * x + self.mix * delayed_sample
+
+        return {self.output: y}
 
 
 # --- Exporting Logic ---
-_OUTPUT_PATH = flags.DEFINE_string("output_path", "plugins/phaser_plugin.jxap",
+_OUTPUT_PATH = flags.DEFINE_string("output_path", "plugins/flanger_plugin.jxap",
                                    "Where to write the plugin.")
 
 
 def main(_):
-    plugin = PhaserPlugin()
-    jxap.export.export_plugin(plugin).save(_OUTPUT_PATH.value)
+    plugin = FlangerPlugin()
+    packaged_plugin = jxap.export.export_plugin(plugin)
+    print(packaged_plugin.init_mlir)
+    packaged_plugin.save(_OUTPUT_PATH.value)
     print(f"Saved plugin to {_OUTPUT_PATH.value}")
 
 
 if __name__ == "__main__":
     app.run(main)
+
 ```
 
 ### **2\. Export the Plugin**

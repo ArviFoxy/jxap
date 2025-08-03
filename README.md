@@ -77,7 +77,6 @@ class FlangerPlugin(jxap.Plugin):
     feedback: float = 0.7  # Feedback for the delay line
     mix: float = 0.5  # Mix of the original signal and the delayed signal
 
-
     # --- Ports ---
     input = jxap.InputPort("input")
     output = jxap.OutputPort("output")
@@ -231,4 +230,5 @@ The recommended way to develop for JXAP is using VS Code Dev Containers. This pr
 3. **Container Build:**  
    * VS Code will now build the Docker image defined in .devcontainer/Dockerfile. This can take several minutes on the first run as it downloads and installs all dependencies, including the C++ toolchain, Python, and the XLA/MLIR toolchain.  
    * Once the build is complete, you will have a terminal inside the running container, with the repository mounted and ready. The Python environment is already set up with all packages from requirements.txt
+
 
